@@ -20,9 +20,11 @@ parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--num_samples', type=int, default=512)
 parser.add_argument('--width', type=int, default=64)
 parser.add_argument('--hidden_dim', type=int, default=32)
+parser.add_argument('--yolo_dim', type=int, default=32)
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--train_dir', type=str, default=None)
 parser.add_argument('--results_dir', type=str, default="./results")
+parser.add_argument('--img', type=str, default="examples/imgs/github.png")
 args = parser.parse_args()
 
 if args.adjoint:
@@ -35,12 +37,12 @@ class CNF(nn.Module):
     """Adapted from the NumPy implementation at:
     https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
     """
-    def __init__(self, in_out_dim, hidden_dim, width):
+    def __init__(self, in_out_dim, hidden_dim, width, yolo_dim):
         super().__init__()
         self.in_out_dim = in_out_dim
         self.hidden_dim = hidden_dim
         self.width = width
-        self.hyper_net = HyperNetwork(in_out_dim, hidden_dim, width)
+        self.hyper_net = HyperNetwork(in_out_dim, hidden_dim, width, yolo_dim)
 
     def forward(self, t, states):
         z = states[0]
@@ -51,11 +53,12 @@ class CNF(nn.Module):
         with torch.set_grad_enabled(True):
             z.requires_grad_(True)
 
-            W, B, U = self.hyper_net(t)
+            W, B, U, V = self.hyper_net(t)
 
             Z = torch.unsqueeze(z, 0).repeat(self.width, 1, 1)
 
             h = torch.tanh(torch.matmul(Z, W) + B)
+            h = torch.tanh(torch.matmul(h, V))
             dz_dt = torch.matmul(h, U).mean(0)
 
             dlogp_z_dt = -trace_df_dz(dz_dt, z).view(batchsize, 1)
@@ -126,38 +129,44 @@ class HyperNetwork(nn.Module):
     Adapted from the NumPy implementation at:
     https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
     """
-    def __init__(self, in_out_dim, hidden_dim, width):
+    def __init__(self, in_out_dim, hidden_dim, width, yolo_dim):
         super().__init__()
 
-        blocksize = width * in_out_dim
+        blocksize = width * in_out_dim * yolo_dim
 
         self.fc1 = nn.Linear(1, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, 3 * blocksize + width)
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc4 = nn.Linear(hidden_dim, 3 * blocksize + width*yolo_dim)
+        self.fc5 = nn.Linear(hidden_dim, width * yolo_dim*yolo_dim)
 
         self.in_out_dim = in_out_dim
         self.hidden_dim = hidden_dim
         self.width = width
         self.blocksize = blocksize
+        self.yolo_dim = yolo_dim
 
     def forward(self, t):
         # predict params
         params = t.reshape(1, 1)
         params = torch.tanh(self.fc1(params))
         params = torch.tanh(self.fc2(params))
-        params = self.fc3(params)
+        x = params = torch.tanh(self.fc3(params))
+        params = self.fc4(params)
 
         # restructure
         params = params.reshape(-1)
-        W = params[:self.blocksize].reshape(self.width, self.in_out_dim, 1)
+        W = params[:self.blocksize].reshape(self.width, self.in_out_dim, self.yolo_dim)
 
-        U = params[self.blocksize:2 * self.blocksize].reshape(self.width, 1, self.in_out_dim)
+        U = params[self.blocksize:2 * self.blocksize].reshape(self.width, self.yolo_dim, self.in_out_dim)
 
-        G = params[2 * self.blocksize:3 * self.blocksize].reshape(self.width, 1, self.in_out_dim)
+        G = params[2 * self.blocksize:3 * self.blocksize].reshape(self.width, self.yolo_dim, self.in_out_dim)
         U = U * torch.sigmoid(G)
 
-        B = params[3 * self.blocksize:].reshape(self.width, 1, 1)
-        return [W, B, U]
+        V = self.fc5(x).reshape(self.width, self.yolo_dim, self.yolo_dim)
+
+        B = params[3 * self.blocksize:].reshape(self.width, 1, self.yolo_dim)
+        return [W, B, U, V]
 
 
 class RunningAverageMeter(object):
@@ -187,29 +196,53 @@ def get_batch(num_samples):
 
     return(x, logp_diff_t1)
 
+img = np.array(Image.open(args.img).convert('L'))
+h, w = img.shape
+xx = np.linspace(-1.5, 1.5, w)
+yy = np.linspace(-1.5, 1.5, h)
+xx, yy = np.meshgrid(xx, yy)
+xx = xx.reshape(-1, 1)
+yy = yy.reshape(-1, 1)
 
-def get_batch(num_samples, hahaha=[]):
+means = np.concatenate([xx, yy], 1)
+img = img.max() - img
+probs = img.reshape(-1) / img.sum()
+
+std = np.array([8 / w / 2, 8 / h / 2])
+
+def get_batch(num_samples):
     # get the points in circles
-    if len(hahaha) == 0:
-        p_z0 = torch.distributions.MultivariateNormal(
-            loc=torch.tensor([0.0, 0.0]).to(device),
-            covariance_matrix=torch.tensor([[0.01, 0.0], [0.0, 0.01]]).to(device)
-        )
-        k = 6
-        n = num_samples // k
-        points = []
-        for i in range(k):
-            samples = p_z0.sample([n])
-            x = np.cos(i/k*2*np.pi)
-            y = np.sin(i/k*2*np.pi)
-            samples = samples + torch.tensor([x, y])
-            points.append(samples)
-        points = torch.concat(points)
-        x = points.type(torch.float32).to(device)
-        logp_diff_t1 = torch.zeros(len(x), 1).type(torch.float32).to(device)
-        hahaha.append((x, logp_diff_t1))
+    inds = np.random.choice(int(probs.shape[0]), int(num_samples), p=probs)
+    m = means[inds]
+    points = np.random.randn(*m.shape) * std + m
+    x = torch.tensor(points).type(torch.float32).to(device)
+    logp_diff_t1 = torch.zeros(num_samples, 1).type(torch.float32).to(device)
 
-    return hahaha[0]
+    return(x, logp_diff_t1)
+
+
+# def get_batch(num_samples, hahaha=[]):
+#     # get the points in circles
+#     if len(hahaha) == 0:
+#         p_z0 = torch.distributions.MultivariateNormal(
+#             loc=torch.tensor([0.0, 0.0]).to(device),
+#             covariance_matrix=torch.tensor([[0.01, 0.0], [0.0, 0.01]]).to(device)
+#         )
+#         k = 6
+#         n = num_samples // k
+#         points = []
+#         for i in range(k):
+#             samples = p_z0.sample([n])
+#             x = np.cos(i/k*2*np.pi)
+#             y = np.sin(i/k*2*np.pi)
+#             samples = samples + torch.tensor([x, y])
+#             points.append(samples)
+#         points = torch.concat(points)
+#         x = points.type(torch.float32).to(device)
+#         logp_diff_t1 = torch.zeros(len(x), 1).type(torch.float32).to(device)
+#         hahaha.append((x, logp_diff_t1))
+
+#     return hahaha[0]
 
 
 if __name__ == '__main__':
@@ -219,7 +252,7 @@ if __name__ == '__main__':
                           if torch.cuda.is_available() else 'cpu')
 
     # model
-    func = CNF2(in_out_dim=2, hidden_dim=args.hidden_dim, width=args.width).to(device)
+    func = CNF(in_out_dim=2, hidden_dim=args.hidden_dim, width=args.width, yolo_dim=args.yolo_dim).to(device)
     optimizer = optim.Adam(func.parameters(), lr=args.lr)
     p_z0 = torch.distributions.MultivariateNormal(
         loc=torch.tensor([0.0, 0.0]).to(device),
@@ -265,6 +298,8 @@ if __name__ == '__main__':
             print('Iter: {}, running avg loss: {:.4f}'.format(itr, loss_meter.avg))
 
     except KeyboardInterrupt:
+        pass
+    finally:
         if args.train_dir is not None:
             ckpt_path = os.path.join(args.train_dir, 'ckpt.pth')
             torch.save({
@@ -275,7 +310,7 @@ if __name__ == '__main__':
     print('Training complete after {} iters.'.format(itr))
 
     if args.viz:
-        viz_samples = 30000
+        viz_samples = 3000
         viz_timesteps = 41
         target_sample, _ = get_batch(viz_samples)
 
