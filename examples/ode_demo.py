@@ -61,7 +61,7 @@ if args.viz:
     ax_traj = fig.add_subplot(131, frameon=False)
     ax_phase = fig.add_subplot(132, frameon=False)
     ax_vecfield = fig.add_subplot(133, frameon=False)
-    plt.show(block=False)
+    # plt.show(block=False)
 
 
 def visualize(true_y, pred_y, odefunc, itr):

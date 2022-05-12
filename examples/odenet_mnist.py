@@ -9,21 +9,42 @@ from torch.utils.data import DataLoader
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--network', type=str, choices=['resnet', 'odenet'], default='odenet')
-parser.add_argument('--tol', type=float, default=1e-3)
-parser.add_argument('--adjoint', type=eval, default=False, choices=[True, False])
-parser.add_argument('--downsampling-method', type=str, default='conv', choices=['conv', 'res'])
-parser.add_argument('--nepochs', type=int, default=160)
-parser.add_argument('--data_aug', type=eval, default=True, choices=[True, False])
-parser.add_argument('--lr', type=float, default=0.1)
-parser.add_argument('--batch_size', type=int, default=128)
-parser.add_argument('--test_batch_size', type=int, default=1000)
+# parser = argparse.ArgumentParser()
+# parser.add_argument('--network', type=str, choices=['resnet', 'odenet'], default='odenet')
+# parser.add_argument('--tol', type=float, default=1e-3)
+# parser.add_argument('--adjoint', type=eval, default=False, choices=[True, False])
+# parser.add_argument('--downsampling-method', type=str, default='conv', choices=['conv', 'res'])
+# parser.add_argument('--nepochs', type=int, default=160)
+# parser.add_argument('--data_aug', type=eval, default=True, choices=[True, False])
+# parser.add_argument('--lr', type=float, default=0.1)
+# parser.add_argument('--batch_size', type=int, default=128)
+# parser.add_argument('--test_batch_size', type=int, default=1000)
 
-parser.add_argument('--save', type=str, default='./experiment1')
-parser.add_argument('--debug', action='store_true')
-parser.add_argument('--gpu', type=int, default=0)
-args = parser.parse_args()
+# parser.add_argument('--save', type=str, default='./experiment1')
+# parser.add_argument('--debug', action='store_true')
+# parser.add_argument('--gpu', type=int, default=0)
+# args = parser.parse_args()
+
+import dataclasses
+@dataclasses.dataclass
+class Config:
+    network: str = "odenet"
+    tol: float = 1e-3
+    adjoint: bool = False
+    downsampling_method: str = "conv"
+    nepochs: int = 10
+    data_aug: bool = True
+    lr: float = 0.1
+    batch_size: int = 138
+    test_batch_size : int = 1000
+
+    save: str = './experiment1'
+    debug: bool = False
+    gpu: int = 0
+    data_path: str = "./data/mnist"
+
+args = Config()
+
 
 if args.adjoint:
     from torchdiffeq import odeint_adjoint as odeint
@@ -179,17 +200,17 @@ def get_mnist_loaders(data_aug=False, batch_size=128, test_batch_size=1000, perc
     ])
 
     train_loader = DataLoader(
-        datasets.MNIST(root='.data/mnist', train=True, download=True, transform=transform_train), batch_size=batch_size,
+        datasets.MNIST(root=args.data_path, train=True, download=True, transform=transform_train), batch_size=batch_size,
         shuffle=True, num_workers=2, drop_last=True
     )
 
     train_eval_loader = DataLoader(
-        datasets.MNIST(root='.data/mnist', train=True, download=True, transform=transform_test),
+        datasets.MNIST(root=args.data_path, train=True, download=True, transform=transform_test),
         batch_size=test_batch_size, shuffle=False, num_workers=2, drop_last=True
     )
 
     test_loader = DataLoader(
-        datasets.MNIST(root='.data/mnist', train=False, download=True, transform=transform_test),
+        datasets.MNIST(root=args.data_path, train=False, download=True, transform=transform_test),
         batch_size=test_batch_size, shuffle=False, num_workers=2, drop_last=True
     )
 
@@ -277,10 +298,11 @@ def get_logger(logpath, filepath, package_files=[], displaying=True, saving=True
 if __name__ == '__main__':
 
     makedirs(args.save)
-    logger = get_logger(logpath=os.path.join(args.save, 'logs'), filepath=os.path.abspath(__file__))
+    logger = get_logger(logpath=os.path.join(args.save, 'logs'), filepath=os.path.abspath("./test.txt"))
     logger.info(args)
 
     device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
+    print(f"device: {device}")
 
     is_odenet = args.network == 'odenet'
 
@@ -332,6 +354,7 @@ if __name__ == '__main__':
     end = time.time()
 
     for itr in range(args.nepochs * batches_per_epoch):
+        # print(f"itr: {itr}")
 
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr_fn(itr)
@@ -342,6 +365,7 @@ if __name__ == '__main__':
         y = y.to(device)
         logits = model(x)
         loss = criterion(logits, y)
+        # print(loss.item())
 
         if is_odenet:
             nfe_forward = feature_layers[0].nfe

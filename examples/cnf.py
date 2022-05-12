@@ -108,7 +108,6 @@ class CNF2(nn.Module):
 
         return (dz_dt, dlogp_z_dt)
 
-
 def trace_df_dz(f, z):
     """Calculates the trace of the Jacobian df/dz.
     Stolen from: https://github.com/rtqichen/ffjord/blob/master/lib/layers/odefunc.py#L13
