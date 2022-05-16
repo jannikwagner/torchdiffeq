@@ -23,8 +23,9 @@ parser.add_argument('--hidden_dim', type=int, default=32)
 parser.add_argument('--yolo_dim', type=int, default=2)
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--train_dir', type=str, default=None)
-parser.add_argument('--results_dir', type=str, default="examples/results")
-parser.add_argument('--img', type=str, default="examples/imgs/github.png")
+parser.add_argument('--results_dir', type=str, default="results_test")
+parser.add_argument('--img', type=str, default="imgs/github.png")
+parser.add_argument('--aug_dim', type=int, default=0)
 args = parser.parse_args()
 
 print(args.adjoint)
@@ -260,7 +261,7 @@ def trace_df_dz(f, z):
     Stolen from: https://github.com/rtqichen/ffjord/blob/master/lib/layers/odefunc.py#L13
     """
     sum_diag = 0.
-    for i in range(z.shape[1]):
+    for i in range(z.shape[1] - args.aug_dim):
         sum_diag += torch.autograd.grad(f[:, i].sum(), z, create_graph=True)[0].contiguous()[:, i].contiguous()
 
     return sum_diag.contiguous()
@@ -456,7 +457,7 @@ if __name__ == '__main__':
     # model
     tol_control = TolControl(args.niters, end_tol=10**-5, steps=5)
     # func = CNF(in_out_dim=2, hidden_dim=args.hidden_dim, width=args.width, yolo_dim=args.yolo_dim).to(device)
-    func = CNF6(in_out_dim=2+1).to(device)
+    func = CNF6(in_out_dim=2+args.aug_dim).to(device)
     optimizer = optim.Adam(func.parameters(), lr=args.lr)
     p_z0 = torch.distributions.MultivariateNormal(
         loc=torch.tensor([0.0, 0.0]).to(device),
@@ -473,13 +474,14 @@ if __name__ == '__main__':
             func.load_state_dict(checkpoint['func_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             print('Loaded ckpt from {}'.format(ckpt_path))
-    tol = tol_control.get_tol()
+    # tol = tol_control.get_tol()
+    tol = 10**-5
     try:
         for itr in range(1, args.niters + 1):
             optimizer.zero_grad()
 
             x, logp_diff_t1 = get_batch(args.num_samples)
-            x_aug = torch.cat([x, torch.zeros([x.shape[0], 1])], 1)
+            x_aug = torch.cat([x, torch.zeros([x.shape[0], args.aug_dim])], 1)
 
             z_t, logp_diff_t = odeint(
                 func,
@@ -489,7 +491,9 @@ if __name__ == '__main__':
                 rtol=tol,
                 method='dopri5',
             )
-            z_t = z_t[..., :-1]
+
+            if args.aug_dim > 0:
+                z_t = z_t[..., :-args.aug_dim]
 
             z_t0, logp_diff_t0 = z_t[-1], logp_diff_t[-1]
             # get probability of z_t0 according to p_z0 and add it to difference (due to change of vars) to get probability of x according to p_x
@@ -500,7 +504,7 @@ if __name__ == '__main__':
             optimizer.step()
 
             loss_meter.update(loss.item())
-            tol = tol_control.update(loss.item())
+            # tol = tol_control.update(loss.item())
 
             print('Iter: {}, running avg loss: {:.4f}'.format(itr, loss_meter.avg))
 
@@ -528,7 +532,7 @@ if __name__ == '__main__':
             z_t0 = p_z0.sample([viz_samples]).to(device)
             logp_diff_t0 = torch.zeros(viz_samples, 1).type(torch.float32).to(device)
 
-            z_t0_aug = torch.cat([z_t0, torch.zeros([z_t0.shape[0], 1])], 1)
+            z_t0_aug = torch.cat([z_t0, torch.zeros([z_t0.shape[0], args.aug_dim])], 1)
             z_t_samples, _ = odeint(
                 func,
                 (z_t0_aug, logp_diff_t0),
@@ -537,7 +541,8 @@ if __name__ == '__main__':
                 rtol=1e-5,
                 method='dopri5',
             )
-            z_t_samples = z_t_samples[..., :-1]
+            if args.aug_dim > 0:
+                z_t_samples = z_t_samples[..., :-args.aug_dim]
 
             # Generate evolution of density
             x = np.linspace(-1.5, 1.5, 100)
@@ -547,7 +552,7 @@ if __name__ == '__main__':
             z_t1 = torch.tensor(points).type(torch.float32).to(device)
             logp_diff_t1 = torch.zeros(z_t1.shape[0], 1).type(torch.float32).to(device)
             
-            z_t1_aug = torch.cat([z_t1, torch.zeros([z_t1.shape[0], 1])], 1)
+            z_t1_aug = torch.cat([z_t1, torch.zeros([z_t1.shape[0], args.aug_dim])], 1)
             z_t_density, logp_diff_t = odeint(
                 func,
                 (z_t1_aug, logp_diff_t1),
@@ -556,7 +561,8 @@ if __name__ == '__main__':
                 rtol=1e-5,
                 method='dopri5',
             )            
-            z_t_density = z_t_density[..., :-1]
+            if args.aug_dim > 0:
+                z_t_density = z_t_density[..., :-args.aug_dim]
 
 
             # Create plots for each timestep
