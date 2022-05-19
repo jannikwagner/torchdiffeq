@@ -12,7 +12,7 @@ def test_ode_net():
     print(x.shape)
     y = ode_net(0,x)
     print(y.shape)
-    print(y)
+    # print(y)
 
 if __name__ == "__main__":
     test_ode_net()
