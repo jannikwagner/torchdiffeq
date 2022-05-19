@@ -1,5 +1,10 @@
 import torch.nn as nn
 import torch
+import torch.optim as optim
+import time
+import numpy as np
+import os
+from torchvision.utils import save_image
 
 from torchdiffeq import odeint_adjoint as odeint
 
@@ -130,13 +135,11 @@ class CNF(nn.Module):
         if reverse:
             integration_times = _flip(integration_times, 0)
         
+        # augmented NODE
         y_shape = list(y.shape)
         y_shape[1] = self.aug_dim
         tt = torch.zeros(y_shape)
         y_aug = torch.cat([tt, y], 1)
-        # print(y.shape, y_aug.shape)
-
-        # Add regularization states.
 
         z_t = odeint(
             self.ode_func,
@@ -149,7 +152,7 @@ class CNF(nn.Module):
         if get_log_px:
             z_t, dlog_pz = z_t
         
-        # print(z_t.shape)
+        # delete augmentation
         if self.aug_dim != 0:
             z_t = z_t[:, :, :-self.aug_dim]
 
@@ -158,7 +161,7 @@ class CNF(nn.Module):
             log_pz = standard_normal_logprob(z).view(z.shape[0], -1).sum(1, keepdim=True)  # logp(z)
             log_px = log_pz - dlog_pz if not reverse else log_pz + dlog_pz
 
-        if len(integration_times) == 2:
+        if len(integration_times) == 2:  # only return end
             z_t = z_t[1]
             if get_log_px:
                 log_px = log_px[1]
@@ -167,3 +170,296 @@ class CNF(nn.Module):
             return z_t, log_px
         else:
             return z_t
+
+
+
+def create_model(args, data_shape):
+    aug_data_shape = list(data_shape)
+    aug_data_shape[0] += args.aug_dim
+
+    def build_cnf():
+        ode_net = ODENet(
+            hidden_dims=args.hidden_dims,
+            input_shape=aug_data_shape,
+            nonlinearity=args.nonlinearity,
+        )
+        ode_func = ODEFunc(
+            ode_net=ode_net,
+            approximate_trace=args.approximate_trace,
+        )
+        cnf = CNF(
+            ode_func=ode_func,
+            T=args.time_length,
+            solver=args.solver,
+            aug_dim=args.aug_dim
+        )
+        return cnf
+    model = build_cnf()
+    return model
+
+import torchvision.transforms as tforms
+import torchvision.datasets as dset
+def add_noise(x):
+    """
+    [0, 1] -> [0, 255] -> add noise -> [0, 1]
+    """
+    if args.add_noise:
+        noise = x.new().resize_as_(x).uniform_()
+        x = x * 255 + noise
+        x = x / 256
+    return x
+
+def get_dataset(args):
+    trans = lambda im_size: tforms.Compose([tforms.Resize(im_size), tforms.ToTensor(), add_noise])
+
+    if args.data == "mnist":
+        im_dim = 1
+        im_size = 28 if args.imagesize is None else args.imagesize
+        train_set = dset.MNIST(root="./data", train=True, transform=trans(im_size), download=True)
+        test_set = dset.MNIST(root="./data", train=False, transform=trans(im_size), download=True)
+    elif args.data == "svhn":
+        im_dim = 3
+        im_size = 32 if args.imagesize is None else args.imagesize
+        train_set = dset.SVHN(root="./data", split="train", transform=trans(im_size), download=True)
+        test_set = dset.SVHN(root="./data", split="test", transform=trans(im_size), download=True)
+    elif args.data == "cifar10":
+        im_dim = 3
+        im_size = 32 if args.imagesize is None else args.imagesize
+        train_set = dset.CIFAR10(
+            root="./data", train=True, transform=tforms.Compose([
+                tforms.Resize(im_size),
+                tforms.RandomHorizontalFlip(),
+                tforms.ToTensor(),
+                add_noise,
+            ]), download=True
+        )
+        test_set = dset.CIFAR10(root="./data", train=False, transform=trans(im_size), download=True)
+    elif args.data == 'celeba':
+        im_dim = 3
+        im_size = 64 if args.imagesize is None else args.imagesize
+        train_set = dset.CelebA(
+            train=True, transform=tforms.Compose([
+                tforms.ToPILImage(),
+                tforms.Resize(im_size),
+                tforms.RandomHorizontalFlip(),
+                tforms.ToTensor(),
+                add_noise,
+            ])
+        )
+        test_set = dset.CelebA(
+            train=False, transform=tforms.Compose([
+                tforms.ToPILImage(),
+                tforms.Resize(im_size),
+                tforms.ToTensor(),
+                add_noise,
+            ])
+        )
+    elif args.data == 'lsun_church':
+        im_dim = 3
+        im_size = 64 if args.imagesize is None else args.imagesize
+        train_set = dset.LSUN(
+            'data', ['church_outdoor_train'], transform=tforms.Compose([
+                tforms.Resize(96),
+                tforms.RandomCrop(64),
+                tforms.Resize(im_size),
+                tforms.ToTensor(),
+                add_noise,
+            ])
+        )
+        test_set = dset.LSUN(
+            'data', ['church_outdoor_val'], transform=tforms.Compose([
+                tforms.Resize(96),
+                tforms.RandomCrop(64),
+                tforms.Resize(im_size),
+                tforms.ToTensor(),
+                add_noise,
+            ])
+        )
+    data_shape = (im_dim, im_size, im_size)
+    test_loader = torch.utils.data.DataLoader(
+        dataset=test_set, batch_size=args.test_batch_size, shuffle=False, drop_last=True
+    )
+    return train_set, test_loader, data_shape
+
+def get_train_loader(train_set):
+    current_batch_size = args.batch_size
+    train_loader = torch.utils.data.DataLoader(
+        dataset=train_set, batch_size=current_batch_size, shuffle=True, drop_last=True, pin_memory=True
+    )
+    return train_loader
+
+def update_lr(optimizer, itr):
+    iter_frac = min(float(itr + 1) / max(args.warmup_iters, 1), 1.0)
+    lr = args.lr * iter_frac
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+
+def compute_bits_per_dim(x, model: CNF):
+    zero = torch.zeros(x.shape[0], 1).to(x)
+
+    # Don't use data parallelize if batch size is small.
+    # if x.shape[0] < 200:
+    #     model = model.module
+
+    z, log_px = model(x, get_log_px=True)  # run model forward
+
+    log_px_per_dim = torch.sum(log_px) / x.nelement()  # averaged over batches
+    bits_per_dim = -(log_px_per_dim - np.log(256)) / np.log(2)
+
+    return bits_per_dim
+
+class RunningAverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self, momentum=0.99):
+        self.momentum = momentum
+        self.reset()
+
+    def reset(self):
+        self.val = None
+        self.avg = 0
+
+    def update(self, val):
+        if self.val is None:
+            self.avg = val
+        else:
+            self.avg = self.avg * self.momentum + val * (1 - self.momentum)
+        self.val = val
+
+def makedirs(dirname):
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+
+import dataclasses
+@dataclasses.dataclass
+class Args:
+    # hidden_dims = [8,32,32,8]
+    hidden_dims = [4]
+    nonlinearity = "tanh"
+    aug_dim = 1
+
+    approximate_trace = True
+    residual = True
+    
+    time_length = 1.0
+    solver = "dopri5"
+
+    data = "mnist"
+    imagesize = None
+    test_batch_size = 1
+    batch_size = 1
+
+    add_noise = True
+    resume = None
+
+    lr = 10**-3
+    weight_decay = 0.0001
+
+    begin_epoch = 1
+    num_epochs = 1
+    warmup_iters = 1000
+
+    max_grad_norm = 1e10
+
+    log_freq = 10
+    val_freq = 1
+    save = "experiment1"
+
+if __name__ == "__main__":
+
+    args = Args()
+    # train_set, test_loader, data_shape = get_dataset(args)
+    # model = create_model(args, data_shape)
+    # print(model)
+    # print(model(train_set[0][0][None,...]))
+
+    # get deivce
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    cvt = lambda x: x.type(torch.float32).to(device, non_blocking=True)
+
+    # load dataset
+    train_set, test_loader, data_shape = get_dataset(args)
+
+    # build model
+    model = create_model(args, data_shape)
+    print(model)
+
+    # optimizer
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    if torch.cuda.is_available():
+        model = torch.nn.DataParallel(model).cuda()
+
+    # visualize samples
+    fixed_z = cvt(torch.randn(100, *data_shape))
+
+    time_meter = RunningAverageMeter(0.97)
+    loss_meter = RunningAverageMeter(0.97)
+    grad_meter = RunningAverageMeter(0.97)
+
+    best_loss = float("inf")
+    itr = 0
+    for epoch in range(args.begin_epoch, args.num_epochs + 1):
+        model.train()
+        train_loader = get_train_loader(train_set)
+        for _, (x, y) in enumerate(train_loader):
+            start = time.time()
+            update_lr(optimizer, itr)
+            optimizer.zero_grad()
+
+            # cast data and move to device
+            x = cvt(x)
+            # compute loss
+            loss = compute_bits_per_dim(x, model)
+
+            loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
+            optimizer.step()
+
+            time_meter.update(time.time() - start)
+            loss_meter.update(loss.item())
+            grad_meter.update(grad_norm)
+
+            if (itr) % args.log_freq == 0:
+                log_message = (
+                    "Iter {:04d} | Time {:.4f}({:.4f}) | Bit/dim {:.4f}({:.4f}) | "
+                    "Grad Norm {:.4f}({:.4f})".format(
+                        itr, time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg, grad_meter.val, grad_meter.avg
+                    )
+                )
+                print(log_message)
+
+            itr += 1
+            break
+
+        # compute test loss
+        model.eval()
+        if epoch % args.val_freq == 0:
+            with torch.no_grad():
+                start = time.time()
+                losses = []
+                for (x, y) in test_loader:
+                    if not args.conv:
+                        x = x.view(x.shape[0], -1)
+                    x = cvt(x)
+                    loss = compute_bits_per_dim(x, model)
+                    losses.append(loss)
+
+                loss = np.mean(losses)
+                if loss < best_loss:
+                    best_loss = loss
+                    makedirs(args.save)
+                    torch.save({
+                        "args": args,
+                        "state_dict": model.module.state_dict() if torch.cuda.is_available() else model.state_dict(),
+                        "optim_state_dict": optimizer.state_dict(),
+                    }, os.path.join(args.save, "checkpt.pth"))
+
+        # visualize samples and density
+        with torch.no_grad():
+            fig_filename = os.path.join(args.save, "figs", "{:04d}.jpg".format(epoch))
+            makedirs(os.path.dirname(fig_filename))
+            generated_samples = model(fixed_z, get_log_px=False, reverse=True).view(-1, *data_shape)
+            save_image(generated_samples, fig_filename, nrow=10)
+

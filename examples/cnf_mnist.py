@@ -541,23 +541,6 @@ def standard_normal_logprob(z):
     logZ = -0.5 * math.log(2 * math.pi)
     return logZ - z.pow(2) / 2
 
-def compute_bits_per_dim(x, model):
-    zero = torch.zeros(x.shape[0], 1).to(x)
-
-    # Don't use data parallelize if batch size is small.
-    # if x.shape[0] < 200:
-    #     model = model.module
-
-    z, delta_logp = model(x, zero)  # run model forward
-
-    logpz = standard_normal_logprob(z).view(z.shape[0], -1).sum(1, keepdim=True)  # logp(z)
-    logpx = logpz - delta_logp
-
-    logpx_per_dim = torch.sum(logpx) / x.nelement()  # averaged over batches
-    bits_per_dim = -(logpx_per_dim - np.log(256)) / np.log(2)
-
-    return bits_per_dim
-
 def makedirs(dirname):
     if not os.path.exists(dirname):
         os.makedirs(dirname)
@@ -638,9 +621,7 @@ if __name__ == "__main__":
 
     time_meter = RunningAverageMeter(0.97)
     loss_meter = RunningAverageMeter(0.97)
-    steps_meter = RunningAverageMeter(0.97)
     grad_meter = RunningAverageMeter(0.97)
-    tt_meter = RunningAverageMeter(0.97)
 
     best_loss = float("inf")
     itr = 0
