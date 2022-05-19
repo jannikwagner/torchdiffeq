@@ -336,8 +336,8 @@ def makedirs(dirname):
 import dataclasses
 @dataclasses.dataclass
 class Args:
-    # hidden_dims = [8,32,32,8]
-    hidden_dims = [4]
+    hidden_dims = [8,32,32,8]
+    # hidden_dims = [4]
     nonlinearity = "tanh"
     aug_dim = 1
 
@@ -349,8 +349,8 @@ class Args:
 
     data = "mnist"
     imagesize = None
-    test_batch_size = 1
-    batch_size = 1
+    test_batch_size = 128
+    batch_size = 128
 
     add_noise = True
     resume = None
@@ -359,7 +359,7 @@ class Args:
     weight_decay = 0.0001
 
     begin_epoch = 1
-    num_epochs = 1
+    num_epochs = 100
     warmup_iters = 1000
 
     max_grad_norm = 1e10
@@ -390,11 +390,11 @@ if __name__ == "__main__":
     # optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    if torch.cuda.is_available():
-        model = torch.nn.DataParallel(model).cuda()
+    # if torch.cuda.is_available():
+    #     model = torch.nn.DataParallel(model).cuda()
 
     # visualize samples
-    fixed_z = cvt(torch.randn(1, *data_shape))
+    fixed_z = cvt(torch.randn(100, *data_shape))
 
     time_meter = RunningAverageMeter(0.97)
     loss_meter = RunningAverageMeter(0.97)
@@ -434,7 +434,6 @@ if __name__ == "__main__":
                 print(log_message)
 
             itr += 1
-            break
 
         # compute test loss
         model.eval()
@@ -463,4 +462,3 @@ if __name__ == "__main__":
             makedirs(os.path.dirname(fig_filename))
             generated_samples = model(fixed_z, get_log_px=False, reverse=True).view(-1, *data_shape)
             save_image(generated_samples, fig_filename, nrow=10)
-
