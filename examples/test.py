@@ -34,14 +34,18 @@ def test_ode_func():
 def test_cnf():
     print("test_ode_func")
     from cnf_mnist2 import ODENet, ODEFunc, CNF
+    aug_dim = 0
+    batch_size = 3
     input_shape = (3,4,4)
+    aug_input_shape = list(input_shape)
+    aug_input_shape[0] += aug_dim
     hidden_dims = [4,4] 
-    ode_net = ODENet(hidden_dims, input_shape)
+    ode_net = ODENet(hidden_dims, aug_input_shape)
     ode_func = ODEFunc(ode_net, True)
-    cnf = CNF(ode_func, atol=0.00001, rtol=0.00001)
+    cnf = CNF(ode_func, atol=0.0001, rtol=0.0001, aug_dim=aug_dim)
     print(cnf)
 
-    x = torch.as_tensor(np.random.rand(2, *input_shape), dtype=torch.float32)
+    x = torch.as_tensor(np.random.rand(batch_size, *input_shape), dtype=torch.float32)
 
     print(x.shape)
     with torch.no_grad():

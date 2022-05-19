@@ -109,7 +109,7 @@ def standard_normal_logprob(z):
 
 
 class CNF(nn.Module):
-    def __init__(self, ode_func, T=1.0, solver='dopri5', atol=1e-5, rtol=1e-5):
+    def __init__(self, ode_func, T=1.0, solver='dopri5', atol=1e-5, rtol=1e-5, aug_dim=0):
         super().__init__()
         self.ode_func = ode_func
         self.T = T
@@ -118,6 +118,7 @@ class CNF(nn.Module):
         self.rtol = rtol
         self.test_atol = atol
         self.test_rtol = rtol
+        self.aug_dim = aug_dim
     def forward(self, y, get_log_px=True, integration_times=None, reverse=False):
         # reverse=False: x=z_0 to z_T
 
@@ -128,19 +129,31 @@ class CNF(nn.Module):
             integration_times = torch.tensor([0.0, self.T]).to(y)
         if reverse:
             integration_times = _flip(integration_times, 0)
+        
+        y_shape = list(y.shape)
+        y_shape[1] = self.aug_dim
+        tt = torch.zeros(y_shape)
+        y_aug = torch.cat([tt, y], 1)
+        # print(y.shape, y_aug.shape)
 
         # Add regularization states.
 
         z_t = odeint(
             self.ode_func,
-            (y, _log_pz) if get_log_px else y,
-            integration_times.to(y),
+            (y_aug, _log_pz) if get_log_px else y_aug,
+            integration_times.to(y_aug),
             atol=self.atol,
             rtol=self.rtol,
             method=self.solver,
         )
         if get_log_px:
             z_t, dlog_pz = z_t
+        
+        # print(z_t.shape)
+        if self.aug_dim != 0:
+            z_t = z_t[:, :, :-self.aug_dim]
+
+        if get_log_px:
             z = z_t[-1] if not reverse else z_t[0]
             log_pz = standard_normal_logprob(z).view(z.shape[0], -1).sum(1, keepdim=True)  # logp(z)
             log_px = log_pz - dlog_pz if not reverse else log_pz + dlog_pz
