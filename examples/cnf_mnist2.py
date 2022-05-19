@@ -141,7 +141,7 @@ class CNF(nn.Module):
         # augmented NODE
         y_shape = list(y.shape)
         y_shape[1] = self.aug_dim
-        tt = torch.zeros(y_shape)
+        tt = torch.zeros(y_shape).to(y)
         y_aug = torch.cat([tt, y], 1)
 
         z_t = odeint(
@@ -394,7 +394,7 @@ if __name__ == "__main__":
         model = torch.nn.DataParallel(model).cuda()
 
     # visualize samples
-    fixed_z = cvt(torch.randn(100, *data_shape))
+    fixed_z = cvt(torch.randn(1, *data_shape))
 
     time_meter = RunningAverageMeter(0.97)
     loss_meter = RunningAverageMeter(0.97)
