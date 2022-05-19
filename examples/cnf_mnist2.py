@@ -12,8 +12,8 @@ class Conv2dConcat(nn.Module):
     def __init__(self, in_dim, out_dim, kernel_size=3, stride=1, padding=1, residual=True, nonlinearity="relu"):
         super().__init__()
         self.residual = residual and in_dim == out_dim
-        self.nonlinearity = NONLINEARITIES[nonlinearity]
         self._layer = nn.Conv2d(in_dim+1, out_dim, kernel_size=kernel_size, stride=stride, padding=padding)
+        self.nonlinearity = NONLINEARITIES[nonlinearity]
     def forward(self, t, x):
         # print(x.shape)
         tt = torch.ones_like(x[:, :1, :, :]) * t
@@ -31,15 +31,18 @@ NONLINEARITIES = {
     "tanh": nn.Tanh(),
     "relu": nn.ReLU(),
     "softplus": nn.Softplus(),
-    "elu": nn.ELU()
+    "elu": nn.ELU(),
+    "none": nn.Identity(),
+    None: nn.Identity()
 }
 
 class ODENet(nn.Module):
     def __init__(self, hidden_dims, input_shape, nonlinearity="relu"):
         super().__init__()
         layers = []
-        for in_dim, out_dim in zip([input_shape[0]] + hidden_dims, hidden_dims + [input_shape[0]]):
-            layers.append(Conv2dConcat(in_dim, out_dim, nonlinearity=nonlinearity))
+        for l, (in_dim, out_dim) in enumerate(zip([input_shape[0]] + hidden_dims, hidden_dims + [input_shape[0]])):
+            _non_lin = nonlinearity if l < len(hidden_dims) else None
+            layers.append(Conv2dConcat(in_dim, out_dim, nonlinearity=_non_lin))
         self.layers = nn.ModuleList(layers)
     def forward(self, t, x):
         for layer in self.layers:
@@ -440,8 +443,6 @@ if __name__ == "__main__":
                 start = time.time()
                 losses = []
                 for (x, y) in test_loader:
-                    if not args.conv:
-                        x = x.view(x.shape[0], -1)
                     x = cvt(x)
                     loss = compute_bits_per_dim(x, model)
                     losses.append(loss)
