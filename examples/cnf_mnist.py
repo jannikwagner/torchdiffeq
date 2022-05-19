@@ -191,12 +191,11 @@ class ODEnet(nn.Module):
     """
 
     def __init__(
-        self, hidden_dims, input_shape, strides, conv, layer_type="concat", nonlinearity="softplus", num_squeeze=0
+        self, hidden_dims, input_shape, strides, nonlinearity="softplus", num_squeeze=0
     ):
         super(ODEnet, self).__init__()
         self.num_squeeze = num_squeeze
         assert len(strides) == len(hidden_dims) + 1
-        base_layer = ConcatConv2d
         # build layers and add them
         layers = []
         activation_fns = []
@@ -214,7 +213,7 @@ class ODEnet(nn.Module):
             else:
                 raise ValueError('Unsupported stride: {}'.format(stride))
 
-            layer = base_layer(hidden_shape[0], dim_out, **layer_kwargs)
+            layer = ConcatConv2d(hidden_shape[0], dim_out, **layer_kwargs)
             layers.append(layer)
             activation_fns.append(NONLINEARITIES[nonlinearity])
 
@@ -261,7 +260,7 @@ def sample_gaussian_like(y):
 
 class ODEfunc(nn.Module):
 
-    def __init__(self, diffeq, divergence_fn="approximate", residual=False, rademacher=False):
+    def __init__(self, diffeq, divergence_fn="approximate", residual=False):
         super(ODEfunc, self).__init__()
         assert divergence_fn in ("brute_force", "approximate")
 
@@ -316,19 +315,11 @@ class ODEfunc(nn.Module):
         return tuple([dy, -divergence] + [torch.zeros_like(s_).requires_grad_(True) for s_ in states[2:]])
 
 class CNF(nn.Module):
-    def __init__(self, odefunc, T=1.0, train_T=False, regularization_fns=None, solver='dopri5', atol=1e-5, rtol=1e-5):
+    def __init__(self, odefunc, T=1.0, solver='dopri5', atol=1e-5, rtol=1e-5):
         super(CNF, self).__init__()
-        if train_T:
-            self.register_parameter("sqrt_end_time", nn.Parameter(torch.sqrt(torch.tensor(T))))
-        else:
-            self.register_buffer("sqrt_end_time", torch.sqrt(torch.tensor(T)))
+        self.T = T
 
-        nreg = 0
-        if regularization_fns is not None:
-            odefunc = RegularizedODEfunc(odefunc, regularization_fns)
-            nreg = len(regularization_fns)
         self.odefunc = odefunc
-        self.nreg = nreg
         self.regularization_states = None
         self.solver = solver
         self.atol = atol
@@ -346,7 +337,7 @@ class CNF(nn.Module):
             _logpz = logpz
 
         if integration_times is None:
-            integration_times = torch.tensor([0.0, self.sqrt_end_time * self.sqrt_end_time]).to(z)
+            integration_times = torch.tensor([0.0, self.T]).to(z)
         if reverse:
             integration_times = _flip(integration_times, 0)
 
@@ -354,12 +345,11 @@ class CNF(nn.Module):
         self.odefunc.before_odeint()
 
         # Add regularization states.
-        reg_states = tuple(torch.tensor(0).to(z) for _ in range(self.nreg))
 
         if self.training:
             state_t = odeint(
                 self.odefunc,
-                (z, _logpz) + reg_states,
+                (z, _logpz),
                 integration_times.to(z),
                 atol=self.atol,
                 rtol=self.rtol,
@@ -387,129 +377,13 @@ class CNF(nn.Module):
         else:
             return z_t
 
-    def get_regularization_states(self):
-        reg_states = self.regularization_states
-        self.regularization_states = None
-        return reg_states
-
-    def num_evals(self):
-        return self.odefunc._num_evals.item()
-
-
-
 def _flip(x, dim):
     indices = [slice(None)] * x.dim()
     indices[dim] = torch.arange(x.size(dim) - 1, -1, -1, dtype=torch.long, device=x.device)
     return x[tuple(indices)]
 
-class RegularizedODEfunc(nn.Module):
-    def __init__(self, odefunc, regularization_fns):
-        super(RegularizedODEfunc, self).__init__()
-        self.odefunc = odefunc
-        self.regularization_fns = regularization_fns
 
-    def before_odeint(self, *args, **kwargs):
-        self.odefunc.before_odeint(*args, **kwargs)
-
-    def forward(self, t, state):
-        class SharedContext(object):
-            pass
-
-        with torch.enable_grad():
-            x, logp = state[:2]
-            x.requires_grad_(True)
-            logp.requires_grad_(True)
-            dstate = self.odefunc(t, (x, logp))
-            if len(state) > 2:
-                dx, dlogp = dstate[:2]
-                reg_states = tuple(reg_fn(x, logp, dx, dlogp, SharedContext) for reg_fn in self.regularization_fns)
-                return dstate + reg_states
-            else:
-                return dstate
-
-    @property
-    def _num_evals(self):
-        return self.odefunc._num_evals
-
-
-def _batch_root_mean_squared(tensor):
-    tensor = tensor.view(tensor.shape[0], -1)
-    return torch.mean(torch.norm(tensor, p=2, dim=1) / tensor.shape[1]**0.5)
-
-
-def l1_regularzation_fn(x, logp, dx, dlogp, unused_context):
-    del x, logp, dlogp
-    return torch.mean(torch.abs(dx))
-
-
-def l2_regularzation_fn(x, logp, dx, dlogp, unused_context):
-    del x, logp, dlogp
-    return _batch_root_mean_squared(dx)
-
-
-def directional_l2_regularization_fn(x, logp, dx, dlogp, unused_context):
-    del logp, dlogp
-    directional_dx = torch.autograd.grad(dx, x, dx, create_graph=True)[0]
-    return _batch_root_mean_squared(directional_dx)
-
-
-def jacobian_frobenius_regularization_fn(x, logp, dx, dlogp, context):
-    del logp, dlogp
-    if hasattr(context, "jac"):
-        jac = context.jac
-    else:
-        jac = _get_minibatch_jacobian(dx, x)
-        context.jac = jac
-    return _batch_root_mean_squared(jac)
-
-
-def jacobian_diag_frobenius_regularization_fn(x, logp, dx, dlogp, context):
-    del logp, dlogp
-    if hasattr(context, "jac"):
-        jac = context.jac
-    else:
-        jac = _get_minibatch_jacobian(dx, x)
-        context.jac = jac
-    diagonal = jac.view(jac.shape[0], -1)[:, ::jac.shape[1]]  # assumes jac is minibatch square, ie. (N, M, M).
-    return _batch_root_mean_squared(diagonal)
-
-
-def jacobian_offdiag_frobenius_regularization_fn(x, logp, dx, dlogp, context):
-    del logp, dlogp
-    if hasattr(context, "jac"):
-        jac = context.jac
-    else:
-        jac = _get_minibatch_jacobian(dx, x)
-        context.jac = jac
-    diagonal = jac.view(jac.shape[0], -1)[:, ::jac.shape[1]]  # assumes jac is minibatch square, ie. (N, M, M).
-    ss_offdiag = torch.sum(jac.view(jac.shape[0], -1)**2, dim=1) - torch.sum(diagonal**2, dim=1)
-    ms_offdiag = ss_offdiag / (diagonal.shape[1] * (diagonal.shape[1] - 1))
-    return torch.mean(ms_offdiag)
-
-
-def _get_minibatch_jacobian(y, x, create_graph=False):
-    """Computes the Jacobian of y wrt x assuming minibatch-mode.
-
-    Args:
-      y: (N, ...) with a total of D_y elements in ...
-      x: (N, ...) with a total of D_x elements in ...
-    Returns:
-      The minibatch Jacobian matrix of shape (N, D_y, D_x)
-    """
-    assert y.shape[0] == x.shape[0]
-    y = y.view(y.shape[0], -1)
-
-    # Compute Jacobian row by row.
-    jac = []
-    for j in range(y.shape[1]):
-        dy_j_dx = torch.autograd.grad(y[:, j], x, torch.ones_like(y[:, j]), retain_graph=True,
-                                      create_graph=True)[0].view(x.shape[0], -1)
-        jac.append(torch.unsqueeze(dy_j_dx, 1))
-    jac = torch.cat(jac, 1)
-    return jac
-
-
-def create_model(args, data_shape, regularization_fns):
+def create_model(args, data_shape):
     hidden_dims = tuple(map(int, args.dims.split(",")))
     strides = tuple(map(int, args.strides.split(",")))
 
@@ -518,23 +392,322 @@ def create_model(args, data_shape, regularization_fns):
             hidden_dims=hidden_dims,
             input_shape=data_shape,
             strides=strides,
-            conv=args.conv,
-            layer_type=args.layer_type,
             nonlinearity=args.nonlinearity,
         )
         odefunc = ODEfunc(
             diffeq=diffeq,
             divergence_fn=args.divergence_fn,
             residual=args.residual,
-            rademacher=args.rademacher,
         )
         cnf = CNF(
             odefunc=odefunc,
             T=args.time_length,
-            train_T=args.train_T,
-            regularization_fns=regularization_fns,
             solver=args.solver,
         )
         return cnf
     model = build_cnf()
     return model
+
+
+import torchvision.transforms as tforms
+import torchvision.datasets as dset
+def add_noise(x):
+    """
+    [0, 1] -> [0, 255] -> add noise -> [0, 1]
+    """
+    if args.add_noise:
+        noise = x.new().resize_as_(x).uniform_()
+        x = x * 255 + noise
+        x = x / 256
+    return x
+
+def get_dataset(args):
+    trans = lambda im_size: tforms.Compose([tforms.Resize(im_size), tforms.ToTensor(), add_noise])
+
+    if args.data == "mnist":
+        im_dim = 1
+        im_size = 28 if args.imagesize is None else args.imagesize
+        train_set = dset.MNIST(root="./data", train=True, transform=trans(im_size), download=True)
+        test_set = dset.MNIST(root="./data", train=False, transform=trans(im_size), download=True)
+    elif args.data == "svhn":
+        im_dim = 3
+        im_size = 32 if args.imagesize is None else args.imagesize
+        train_set = dset.SVHN(root="./data", split="train", transform=trans(im_size), download=True)
+        test_set = dset.SVHN(root="./data", split="test", transform=trans(im_size), download=True)
+    elif args.data == "cifar10":
+        im_dim = 3
+        im_size = 32 if args.imagesize is None else args.imagesize
+        train_set = dset.CIFAR10(
+            root="./data", train=True, transform=tforms.Compose([
+                tforms.Resize(im_size),
+                tforms.RandomHorizontalFlip(),
+                tforms.ToTensor(),
+                add_noise,
+            ]), download=True
+        )
+        test_set = dset.CIFAR10(root="./data", train=False, transform=trans(im_size), download=True)
+    elif args.data == 'celeba':
+        im_dim = 3
+        im_size = 64 if args.imagesize is None else args.imagesize
+        train_set = dset.CelebA(
+            train=True, transform=tforms.Compose([
+                tforms.ToPILImage(),
+                tforms.Resize(im_size),
+                tforms.RandomHorizontalFlip(),
+                tforms.ToTensor(),
+                add_noise,
+            ])
+        )
+        test_set = dset.CelebA(
+            train=False, transform=tforms.Compose([
+                tforms.ToPILImage(),
+                tforms.Resize(im_size),
+                tforms.ToTensor(),
+                add_noise,
+            ])
+        )
+    elif args.data == 'lsun_church':
+        im_dim = 3
+        im_size = 64 if args.imagesize is None else args.imagesize
+        train_set = dset.LSUN(
+            'data', ['church_outdoor_train'], transform=tforms.Compose([
+                tforms.Resize(96),
+                tforms.RandomCrop(64),
+                tforms.Resize(im_size),
+                tforms.ToTensor(),
+                add_noise,
+            ])
+        )
+        test_set = dset.LSUN(
+            'data', ['church_outdoor_val'], transform=tforms.Compose([
+                tforms.Resize(96),
+                tforms.RandomCrop(64),
+                tforms.Resize(im_size),
+                tforms.ToTensor(),
+                add_noise,
+            ])
+        )
+    data_shape = (im_dim, im_size, im_size)
+    test_loader = torch.utils.data.DataLoader(
+        dataset=test_set, batch_size=args.test_batch_size, shuffle=False, drop_last=True
+    )
+    return train_set, test_loader, data_shape
+
+def get_train_loader(train_set):
+    current_batch_size = args.batch_size
+    train_loader = torch.utils.data.DataLoader(
+        dataset=train_set, batch_size=current_batch_size, shuffle=True, drop_last=True, pin_memory=True
+    )
+    return train_loader
+
+class RunningAverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self, momentum=0.99):
+        self.momentum = momentum
+        self.reset()
+
+    def reset(self):
+        self.val = None
+        self.avg = 0
+
+    def update(self, val):
+        if self.val is None:
+            self.avg = val
+        else:
+            self.avg = self.avg * self.momentum + val * (1 - self.momentum)
+        self.val = val
+
+def update_lr(optimizer, itr):
+    iter_frac = min(float(itr + 1) / max(args.warmup_iters, 1), 1.0)
+    lr = args.lr * iter_frac
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+
+def compute_bits_per_dim(x, model):
+    zero = torch.zeros(x.shape[0], 1).to(x)
+
+    # Don't use data parallelize if batch size is small.
+    # if x.shape[0] < 200:
+    #     model = model.module
+
+    z, delta_logp = model(x, zero)  # run model forward
+
+    logpz = standard_normal_logprob(z).view(z.shape[0], -1).sum(1, keepdim=True)  # logp(z)
+    logpx = logpz - delta_logp
+
+    logpx_per_dim = torch.sum(logpx) / x.nelement()  # averaged over batches
+    bits_per_dim = -(logpx_per_dim - np.log(256)) / np.log(2)
+
+    return bits_per_dim
+
+import math
+def standard_normal_logprob(z):
+    logZ = -0.5 * math.log(2 * math.pi)
+    return logZ - z.pow(2) / 2
+
+def compute_bits_per_dim(x, model):
+    zero = torch.zeros(x.shape[0], 1).to(x)
+
+    # Don't use data parallelize if batch size is small.
+    # if x.shape[0] < 200:
+    #     model = model.module
+
+    z, delta_logp = model(x, zero)  # run model forward
+
+    logpz = standard_normal_logprob(z).view(z.shape[0], -1).sum(1, keepdim=True)  # logp(z)
+    logpx = logpz - delta_logp
+
+    logpx_per_dim = torch.sum(logpx) / x.nelement()  # averaged over batches
+    bits_per_dim = -(logpx_per_dim - np.log(256)) / np.log(2)
+
+    return bits_per_dim
+
+def makedirs(dirname):
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+
+from torchvision.utils import save_image
+import dataclasses
+@dataclasses.dataclass
+class Args:
+    dims = "8,32,32,8"
+    strides = "2,2,1,-2,-2"
+    nonlinearity = "tanh"
+
+    divergence_fn = "approximate"
+    residual = True
+    
+    time_length = 1.0
+    solver = "dopri5"
+
+    data = "mnist"
+    imagesize = None
+    test_batch_size = 200
+    batch_size = 200
+
+    add_noise = True
+    resume = None
+
+    lr = 10**-3
+    weight_decay = 0.0001
+
+    begin_epoch = 1
+    num_epochs = 100
+    warmup_iters = 1000
+
+    max_grad_norm = 1e10
+
+    log_freq = 10
+
+import time
+
+if __name__ == "__main__":
+    args = Args()
+    # train_set, test_loader, data_shape = get_dataset(args)
+    # model = create_model(args, data_shape)
+    # print(model)
+    # print(model(train_set[0][0][None,...]))
+
+    # get deivce
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    cvt = lambda x: x.type(torch.float32).to(device, non_blocking=True)
+
+    # load dataset
+    train_set, test_loader, data_shape = get_dataset(args)
+
+    # build model
+    model = create_model(args, data_shape)
+
+
+    # optimizer
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    # restore parameters
+    if args.resume is not None:
+        checkpt = torch.load(args.resume, map_location=lambda storage, loc: storage)
+        model.load_state_dict(checkpt["state_dict"])
+        if "optim_state_dict" in checkpt.keys():
+            optimizer.load_state_dict(checkpt["optim_state_dict"])
+            # Manually move optimizer state to device.
+            for state in optimizer.state.values():
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = cvt(v)
+
+    if torch.cuda.is_available():
+        model = torch.nn.DataParallel(model).cuda()
+
+    # For visualization.
+    fixed_z = cvt(torch.randn(100, *data_shape))
+
+    time_meter = RunningAverageMeter(0.97)
+    loss_meter = RunningAverageMeter(0.97)
+    steps_meter = RunningAverageMeter(0.97)
+    grad_meter = RunningAverageMeter(0.97)
+    tt_meter = RunningAverageMeter(0.97)
+
+    best_loss = float("inf")
+    itr = 0
+    for epoch in range(args.begin_epoch, args.num_epochs + 1):
+        model.train()
+        train_loader = get_train_loader(train_set)
+        for _, (x, y) in enumerate(train_loader):
+            start = time.time()
+            update_lr(optimizer, itr)
+            optimizer.zero_grad()
+
+            # cast data and move to device
+            x = cvt(x)
+            # compute loss
+            loss = compute_bits_per_dim(x, model)
+
+            loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
+            optimizer.step()
+
+            time_meter.update(time.time() - start)
+            loss_meter.update(loss.item())
+            grad_meter.update(grad_norm)
+
+            if (itr) % args.log_freq == 0:
+                log_message = (
+                    "Iter {:04d} | Time {:.4f}({:.4f}) | Bit/dim {:.4f}({:.4f}) | "
+                    "Grad Norm {:.4f}({:.4f})".format(
+                        itr, time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg, grad_meter.val, grad_meter.avg
+                    )
+                )
+                print(log_message)
+
+            itr += 1
+
+        # compute test loss
+        model.eval()
+        if epoch % args.val_freq == 0:
+            with torch.no_grad():
+                start = time.time()
+                losses = []
+                for (x, y) in test_loader:
+                    if not args.conv:
+                        x = x.view(x.shape[0], -1)
+                    x = cvt(x)
+                    loss = compute_bits_per_dim(x, model)
+                    losses.append(loss)
+
+                loss = np.mean(losses)
+                if loss < best_loss:
+                    best_loss = loss
+                    makedirs(args.save)
+                    torch.save({
+                        "args": args,
+                        "state_dict": model.module.state_dict() if torch.cuda.is_available() else model.state_dict(),
+                        "optim_state_dict": optimizer.state_dict(),
+                    }, os.path.join(args.save, "checkpt.pth"))
+
+        # visualize samples and density
+        with torch.no_grad():
+            fig_filename = os.path.join(args.save, "figs", "{:04d}.jpg".format(epoch))
+            makedirs(os.path.dirname(fig_filename))
+            generated_samples = model(fixed_z, reverse=True).view(-1, *data_shape)
+            save_image(generated_samples, fig_filename, nrow=10)
