@@ -308,10 +308,6 @@ class ODEfunc(nn.Module):
                 divergence = divergence_bf(dy, y).view(batchsize, 1)
             else:
                 divergence = self.divergence_fn(dy, y, e=self._e).view(batchsize, 1)
-        if self.residual:
-            dy = dy - y
-            divergence -= torch.ones_like(divergence) * torch.tensor(np.prod(y.shape[1:]), dtype=torch.float32
-                                                                     ).to(divergence)
         return tuple([dy, -divergence] + [torch.zeros_like(s_).requires_grad_(True) for s_ in states[2:]])
 
 class CNF(nn.Module):
@@ -320,7 +316,6 @@ class CNF(nn.Module):
         self.T = T
 
         self.odefunc = odefunc
-        self.regularization_states = None
         self.solver = solver
         self.atol = atol
         self.rtol = rtol
