@@ -38,7 +38,7 @@ def test_cnf():
     hidden_dims = [4,4] 
     ode_net = ODENet(hidden_dims, input_shape)
     ode_func = ODEFunc(ode_net, True)
-    cnf = CNF(ode_func, atol=0.001, rtol=0.001)
+    cnf = CNF(ode_func, atol=0.00001, rtol=0.00001)
     print(cnf)
 
     x = torch.as_tensor(np.random.rand(2, *input_shape), dtype=torch.float32)

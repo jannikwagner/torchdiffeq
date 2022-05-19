@@ -1,6 +1,3 @@
-from curses import nonl
-from turtle import forward
-from numpy import isin
 import torch.nn as nn
 import torch
 
@@ -57,7 +54,7 @@ class StackedODENet(nn.Module):
             x = layer(t, x)
         return x
 
-def divergence_bf(f, z, **unused_kwargs):
+def divergence_bf(f, z):
     f_flat = f.view(f.shape[0], -1)
     sum_diag = 0.
     for i in range(f_flat.shape[1]):
@@ -150,6 +147,8 @@ class CNF(nn.Module):
 
         if len(integration_times) == 2:
             z_t = z_t[1]
+            if get_log_px:
+                log_px = log_px[1]
         
         if get_log_px:
             return z_t, log_px
