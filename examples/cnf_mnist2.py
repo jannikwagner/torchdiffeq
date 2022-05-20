@@ -83,7 +83,9 @@ class ODEFunc(nn.Module):
         super().__init__()
         self.ode_net = ode_net
         self.divergence_fn = divergence_approx if approximate_trace else divergence_bf
+        self.num_calls = 0
     def forward(self, t, states):
+        self.num_calls += 1
         z, log_pz = states if isinstance(states, tuple) else (states, None)
         t = torch.tensor(t).type_as(z)
         batchsize = z.shape[0]
@@ -92,15 +94,17 @@ class ODEFunc(nn.Module):
                 z.requires_grad_(True)
                 t.requires_grad_(True)
                 dx = self.ode_net(t, z)
-                # Hack for 2D data to use brute force divergence computation.
-                if not self.training:
-                    divergence = divergence_bf(dx, z).view(batchsize, 1)
-                else:
-                    divergence = self.divergence_fn(dx, z).view(batchsize, 1)
+                
+                # if not self.training:
+                #     divergence = divergence_bf(dx, z).view(batchsize, 1)
+                # else:
+                divergence = self.divergence_fn(dx, z).view(batchsize, 1)
             return tuple([dx, -divergence])
         else:
             dx = self.ode_net(t, z)
             return dx
+    def before_int(self):
+        self.num_calls = 0
 
         
 def _flip(x, dim):
@@ -115,7 +119,7 @@ def standard_normal_logprob(z):
 
 
 class CNF(nn.Module):
-    def __init__(self, ode_func, T=1.0, solver='dopri5', atol=1e-5, rtol=1e-5, aug_dim=0):
+    def __init__(self, ode_func:ODEFunc, T=1.0, solver='dopri5', atol=1e-5, rtol=1e-5, aug_dim=0):
         super().__init__()
         self.ode_func = ode_func
         self.T = T
@@ -137,11 +141,12 @@ class CNF(nn.Module):
             integration_times = _flip(integration_times, 0)
         
         # augmented NODE
-        if self.aug_dim != 0:
-            y_shape = list(y.shape)
-            y_shape[1] = self.aug_dim
-            tt = torch.zeros(y_shape).to(y)
-            y_aug = torch.cat([tt, y], 1)
+        y_shape = list(y.shape)
+        y_shape[1] = self.aug_dim
+        tt = torch.zeros(y_shape).to(y)
+        y_aug = torch.cat([tt, y], 1)
+        
+        self.ode_func.before_int()
 
         z_t = odeint(
             self.ode_func,
@@ -193,7 +198,9 @@ def create_model(args, data_shape):
             ode_func=ode_func,
             T=args.time_length,
             solver=args.solver,
-            aug_dim=args.aug_dim
+            aug_dim=args.aug_dim,
+            atol=args.tol,
+            rtol=args.tol
         )
         return cnf
     model = build_cnf()
@@ -338,13 +345,14 @@ class Args:
     hidden_dims = []
     # hidden_dims = [4]
     nonlinearity = "tanh"
-    aug_dim = 1
+    aug_dim = 0
 
     approximate_trace = True
     residual = True
     
     time_length = 1.0
     solver = "dopri5"
+    tol = 1e-2
 
     data = "mnist"
     imagesize = None
@@ -405,6 +413,7 @@ if __name__ == "__main__":
     time_meter = RunningAverageMeter(0.97)
     loss_meter = RunningAverageMeter(0.97)
     grad_meter = RunningAverageMeter(0.97)
+    calls_meter = RunningAverageMeter(0.97)
 
     best_loss = float("inf")
     itr = 0
@@ -429,12 +438,13 @@ if __name__ == "__main__":
             time_meter.update(time.time() - start)
             loss_meter.update(loss.item())
             grad_meter.update(grad_norm)
+            calls_meter.update(model.ode_func.num_calls)
 
             if (itr) % args.log_freq == 0:
                 log_message = (
                     "Iter {:04d} | Time {:.4f}({:.4f}) | Bit/dim {:.4f}({:.4f}) | "
-                    "Grad Norm {:.4f}({:.4f})".format(
-                        itr, time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg, grad_meter.val, grad_meter.avg
+                    "Grad Norm {:.4f}({:.4f}) | Calls {:.4f}({:.4f})".format(
+                        itr, time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg, grad_meter.val, grad_meter.avg, calls_meter.val, calls_meter.avg
                     )
                 )
                 print(log_message)
@@ -444,6 +454,7 @@ if __name__ == "__main__":
         # compute test loss
         model.eval()
         if epoch % args.val_freq == 0:
+            print("validating")
             with torch.no_grad():
                 start = time.time()
                 losses = []
@@ -463,6 +474,7 @@ if __name__ == "__main__":
                     }, os.path.join(args.save, "checkpt.pth"))
 
         # visualize samples and density
+        print("sample")
         with torch.no_grad():
             fig_filename = os.path.join(args.save, "figs", "{:04d}.jpg".format(epoch))
             makedirs(os.path.dirname(fig_filename))
