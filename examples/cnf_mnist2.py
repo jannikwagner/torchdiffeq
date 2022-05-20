@@ -395,8 +395,8 @@ if __name__ == "__main__":
     # optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # if torch.cuda.is_available():
-    #     model = torch.nn.DataParallel(model).cuda()
+    if torch.cuda.is_available():
+        model = torch.nn.DataParallel(model).cuda()
 
     # visualize samples
     fixed_z = cvt(torch.randn(100, *data_shape))
