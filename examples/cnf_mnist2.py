@@ -179,7 +179,6 @@ class CNF(nn.Module):
             return z_t
 
 
-
 def create_model(args, data_shape):
     aug_data_shape = list(data_shape)
     aug_data_shape[0] += args.aug_dim
@@ -342,17 +341,17 @@ def makedirs(dirname):
 import dataclasses
 @dataclasses.dataclass
 class Args:
-    hidden_dims = [4]
+    hidden_dims = [8,8]
     # hidden_dims = [4]
     nonlinearity = "tanh"
-    aug_dim = 0
+    aug_dim = 1
 
     approximate_trace = True
     residual = True
     
     time_length = 1.0
     solver = "dopri5"
-    tol = 1e-4
+    tol = 1e-2
 
     data = "mnist"
     imagesize = None
@@ -373,7 +372,7 @@ class Args:
 
     log_freq = 10
     val_freq = 1
-    save = "experiment4_hidden4"
+    save = "experiment5_tol1e-2"
 
     adjoint = True
 
