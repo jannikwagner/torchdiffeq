@@ -137,10 +137,11 @@ class CNF(nn.Module):
             integration_times = _flip(integration_times, 0)
         
         # augmented NODE
-        y_shape = list(y.shape)
-        y_shape[1] = self.aug_dim
-        tt = torch.zeros(y_shape).to(y)
-        y_aug = torch.cat([tt, y], 1)
+        if self.aug_dim != 0:
+            y_shape = list(y.shape)
+            y_shape[1] = self.aug_dim
+            tt = torch.zeros(y_shape).to(y)
+            y_aug = torch.cat([tt, y], 1)
 
         z_t = odeint(
             self.ode_func,
@@ -155,7 +156,7 @@ class CNF(nn.Module):
         
         # delete augmentation
         if self.aug_dim != 0:
-            z_t = z_t[:, :, :-self.aug_dim]
+            z_t = z_t[:, :, self.aug_dim:]
 
         if get_log_px:
             z = z_t[-1] if not reverse else z_t[0]
