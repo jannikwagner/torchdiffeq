@@ -371,9 +371,9 @@ class Args:
 
     max_grad_norm = 1e10
 
-    log_freq = 1
+    log_freq = 10
     val_freq = 1
-    save = "experiment2"
+    save = "experiment3_dummy"
 
     adjoint = True
 
@@ -455,7 +455,6 @@ if __name__ == "__main__":
                 print(log_message)
 
             itr += 1
-            break
 
         # compute test loss
         model.eval()
@@ -468,7 +467,6 @@ if __name__ == "__main__":
                     x = cvt(x)
                     loss = compute_bits_per_dim(x, model)
                     losses.append(loss.item())
-                    break
 
                 loss = np.mean(losses)
                 if loss < best_loss:
