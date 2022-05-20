@@ -377,6 +377,8 @@ class Args:
 
     adjoint = True
 
+    data_parallel = False
+
 if __name__ == "__main__":
 
     args = Args()
@@ -405,7 +407,9 @@ if __name__ == "__main__":
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     if torch.cuda.is_available():
-        model = torch.nn.DataParallel(model).cuda()
+        if args.data_parallel:
+            model = torch.nn.DataParallel(model)
+        model = model.cuda()
 
     # visualize samples
     fixed_z = cvt(torch.randn(100, *data_shape))
