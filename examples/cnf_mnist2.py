@@ -454,6 +454,7 @@ if __name__ == "__main__":
                 print(log_message)
 
             itr += 1
+            break
 
         # compute test loss
         model.eval()
@@ -465,7 +466,7 @@ if __name__ == "__main__":
                 for (x, y) in test_loader:
                     x = cvt(x)
                     loss = compute_bits_per_dim(x, model)
-                    losses.append(loss)
+                    losses.append(loss.item())
 
                 loss = np.mean(losses)
                 if loss < best_loss:
