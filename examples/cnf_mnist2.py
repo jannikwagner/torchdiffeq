@@ -363,7 +363,7 @@ class Args:
 
     max_grad_norm = 1e10
 
-    log_freq = 10
+    log_freq = 1
     val_freq = 1
     save = "experiment2"
 
