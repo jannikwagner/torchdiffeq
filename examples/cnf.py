@@ -274,7 +274,7 @@ probs = img.reshape(-1) / img.sum()
 std = np.array([8 / w / 2, 8 / h / 2])
 
 def get_batch(num_samples):
-    # get the points from an image
+    # get the points from the image specified in args.img
     inds = np.random.choice(int(probs.shape[0]), int(num_samples), p=probs)
     m = means[inds]
     points = np.random.randn(*m.shape) * std + m
