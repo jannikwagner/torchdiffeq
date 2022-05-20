@@ -6,8 +6,6 @@ import numpy as np
 import os
 from torchvision.utils import save_image
 
-from torchdiffeq import odeint_adjoint as odeint
-
 class Conv2dConcat(nn.Module):
     def __init__(self, in_dim, out_dim, kernel_size=3, stride=1, padding=1, residual=True, nonlinearity="relu"):
         super().__init__()
@@ -368,9 +366,16 @@ class Args:
     val_freq = 1
     save = "experiment1"
 
+    adjoint = False
+
 if __name__ == "__main__":
 
     args = Args()
+    if args.adjoint:
+        from torchdiffeq import odeint_adjoint as odeint
+    else:
+        from torchdiffeq import odeint
+
     # train_set, test_loader, data_shape = get_dataset(args)
     # model = create_model(args, data_shape)
     # print(model)
