@@ -366,7 +366,7 @@ class Args:
     val_freq = 1
     save = "experiment1"
 
-    adjoint = False
+    adjoint = True
 
 if __name__ == "__main__":
 
