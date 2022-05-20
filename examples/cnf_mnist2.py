@@ -335,7 +335,7 @@ def makedirs(dirname):
 import dataclasses
 @dataclasses.dataclass
 class Args:
-    hidden_dims = [8,32,32,8]
+    hidden_dims = [8]
     # hidden_dims = [4]
     nonlinearity = "tanh"
     aug_dim = 1
@@ -365,7 +365,7 @@ class Args:
 
     log_freq = 10
     val_freq = 1
-    save = "experiment1"
+    save = "experiment2"
 
     adjoint = True
 
