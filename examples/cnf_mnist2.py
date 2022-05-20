@@ -442,7 +442,8 @@ if __name__ == "__main__":
             time_meter.update(time.time() - start)
             loss_meter.update(loss.item())
             grad_meter.update(grad_norm)
-            calls_meter.update(model.ode_func.num_calls)
+            num_calls = model.module.ode_func.num_calls if args.data_parallel and torch.cuda.is_available() else model.ode_func.num_calls
+            calls_meter.update(num_calls)
 
             if (itr) % args.log_freq == 0:
                 log_message = (
@@ -467,6 +468,7 @@ if __name__ == "__main__":
                     x = cvt(x)
                     loss = compute_bits_per_dim(x, model)
                     losses.append(loss.item())
+                    break
 
                 loss = np.mean(losses)
                 if loss < best_loss:
@@ -474,7 +476,7 @@ if __name__ == "__main__":
                     makedirs(args.save)
                     torch.save({
                         "args": args,
-                        "state_dict": model.module.state_dict() if torch.cuda.is_available() else model.state_dict(),
+                        "state_dict": model.module.state_dict() if args.data_parallel and torch.cuda.is_available() else model.state_dict(),
                         "optim_state_dict": optimizer.state_dict(),
                     }, os.path.join(args.save, "checkpt.pth"))
 
