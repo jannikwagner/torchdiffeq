@@ -157,6 +157,62 @@ class TimeIncorporatingLayer(nn.Module):
 
         return t, z
 
+NONLINEARITIES = {
+    "tanh": nn.Tanh(),
+    "relu": nn.ReLU(),
+    "softplus": nn.Softplus(),
+    "elu": nn.ELU(),
+    "none": nn.Identity(),
+    None: nn.Identity(),
+}
+
+class TimeIncorporatingLayer2(nn.Module):
+    def __init__(self, in_dim, out_dim, activation_fn="tanh", batch_norm=False, time_act_fn="tanh"):
+        super().__init__()
+        activation_fn = NONLINEARITIES[activation_fn]
+        time_act_fn = NONLINEARITIES[time_act_fn]
+        self.fc = nn.Linear(in_dim, out_dim)
+        self.activation_fn = activation_fn
+        self.bn = nn.BatchNorm1d(out_dim) if batch_norm else nn.Identity()
+        self.squash = nn.Sequential(
+            nn.Linear(1, in_dim),
+            time_act_fn,
+            nn.Linear(in_dim, in_dim),
+            nn.Sigmoid()
+        )
+        self.add = nn.Sequential(
+            nn.Linear(1, in_dim),
+            time_act_fn,
+            nn.Linear(in_dim, in_dim)
+        )
+    
+    def forward(self, x):
+        t, z = x
+        t_tensor = torch.zeros((z.shape[0], 1)) + t
+        z = z * self.squash(t_tensor)
+        z = z + self.add(t_tensor)
+        
+        z = self.fc(z)
+        z = self.activation_fn(z)
+        z = self.bn(z)
+
+        return t, z
+
+class LinearBlock(nn.Module):
+    def __init__(self, in_dim, out_dim, activation_fn=F.tanh, batch_norm=False):
+        super().__init__()
+        self.fc = nn.Linear(in_dim, out_dim)
+        self.activation_fn = activation_fn
+        self.bn = nn.BatchNorm1d(out_dim) if batch_norm else nn.Identity()
+    
+    def forward(self, x):
+        t, z = x
+        z = self.fc(z)
+        z = self.activation_fn(z)
+        z = self.bn(z)
+
+        return t, z
+
 
 class CNF4(nn.Module):
     def __init__(self, in_out_dim):
@@ -230,6 +286,123 @@ class CNF6(nn.Module):
                   TimeIncorporatingLayer(32, 64),
                   TimeIncorporatingLayer(64, 32),
                   TimeIncorporatingLayer(32, in_out_dim, activation_fn=nn.Identity(), batch_norm=False),
+        ]
+        self. seq = nn.Sequential(*layers)
+
+    def forward(self, t, states: List[torch.Tensor]):
+        z = states[0]
+        logp_z = states[1]
+
+        batchsize = z.shape[0]
+
+        with torch.set_grad_enabled(True):
+            z.requires_grad_(True)
+
+            _, dz_dt = self.seq((t, z))
+
+            dlogp_z_dt = -trace_df_dz(dz_dt, z).view(batchsize, 1)
+
+        return (dz_dt, dlogp_z_dt)
+
+class CNF7(nn.Module):
+    """
+    CNF with time incoporating layers
+    """
+    def __init__(self, in_out_dim):
+        super().__init__()
+        self.in_out_dim = in_out_dim
+        layers = [TimeIncorporatingLayer(in_out_dim, 64),
+                  TimeIncorporatingLayer(64, 128),
+                  TimeIncorporatingLayer(128, 128),
+                  TimeIncorporatingLayer(128, 64),
+                  TimeIncorporatingLayer(64, in_out_dim, activation_fn=nn.Identity(), batch_norm=False),
+        ]
+        self. seq = nn.Sequential(*layers)
+
+    def forward(self, t, states: List[torch.Tensor]):
+        z = states[0]
+        logp_z = states[1]
+
+        batchsize = z.shape[0]
+
+        with torch.set_grad_enabled(True):
+            z.requires_grad_(True)
+
+            _, dz_dt = self.seq((t, z))
+
+            dlogp_z_dt = -trace_df_dz(dz_dt, z).view(batchsize, 1)
+
+        return (dz_dt, dlogp_z_dt)
+
+class CNF8(nn.Module):
+    """
+    CNF with time incoporating layers
+    """
+    def __init__(self, in_out_dim):
+        super().__init__()
+        self.in_out_dim = in_out_dim
+        layers = [LinearBlock(in_out_dim, 64),
+                  LinearBlock(64, 128),
+                  LinearBlock(128, 128),
+                  LinearBlock(128, 64),
+                  LinearBlock(64, in_out_dim, activation_fn=nn.Identity(), batch_norm=False),
+        ]
+        self. seq = nn.Sequential(*layers)
+
+    def forward(self, t, states: List[torch.Tensor]):
+        z = states[0]
+        logp_z = states[1]
+
+        batchsize = z.shape[0]
+
+        with torch.set_grad_enabled(True):
+            z.requires_grad_(True)
+
+            _, dz_dt = self.seq((t, z))
+
+            dlogp_z_dt = -trace_df_dz(dz_dt, z).view(batchsize, 1)
+
+        return (dz_dt, dlogp_z_dt)
+
+class CNF9(nn.Module):
+    """
+    CNF with time incoporating layers
+    """
+    def __init__(self, in_out_dim):
+        super().__init__()
+        self.in_out_dim = in_out_dim
+        layers = [TimeIncorporatingLayer2(in_out_dim, 64),
+                  TimeIncorporatingLayer2(64, 128),
+                  TimeIncorporatingLayer2(128, 128),
+                  TimeIncorporatingLayer2(128, 64),
+                  TimeIncorporatingLayer2(64, in_out_dim, activation_fn=None, batch_norm=False),
+        ]
+        self. seq = nn.Sequential(*layers)
+
+    def forward(self, t, states: List[torch.Tensor]):
+        z = states[0]
+        logp_z = states[1]
+
+        batchsize = z.shape[0]
+
+        with torch.set_grad_enabled(True):
+            z.requires_grad_(True)
+
+            _, dz_dt = self.seq((t, z))
+
+            dlogp_z_dt = -trace_df_dz(dz_dt, z).view(batchsize, 1)
+
+        return (dz_dt, dlogp_z_dt)
+
+class CNF10(nn.Module):
+    """
+    CNF with time incoporating layers
+    """
+    def __init__(self, in_out_dim):
+        super().__init__()
+        self.in_out_dim = in_out_dim
+        layers = [TimeIncorporatingLayer2(in_out_dim, 64),
+                  TimeIncorporatingLayer2(64, in_out_dim, activation_fn=None, batch_norm=False),
         ]
         self. seq = nn.Sequential(*layers)
 
@@ -450,35 +623,6 @@ class TolControl:
             # print(self.patience_counter, self.last_loss, loss)
         return self.get_tol()
 
-class CNF_wrapper(nn.Module):
-    def __init__(self, cnf, t0, t1, aug_dim):
-        self.func = cnf
-        self.in_out_dim = cnf.in_out_dim - aug_dim
-        self.t0 = t0
-        self.t1 = t1
-        self.aug_dim = aug_dim
-        self.p_z0 = torch.distributions.MultivariateNormal(
-            loc=torch.zeros(self.in_out_dim),
-            covariance_matrix=torch.diag(torch.ones(self.in_out_dim)/10)
-        )
-
-    def forward(self):
-        pass
-
-    def integrate(self, x, logp_diff_t0, t0, t1, tol):
-        x_aug = torch.cat([x, torch.zeros([x.shape[0], 1])], self.aug_dim)
-
-        z_t, logp_diff_t = odeint(
-            func,
-            (x_aug, logp_diff_t0),
-            torch.tensor([t0, t1]).type(torch.float32).to(x),
-            atol=tol,
-            rtol=tol,
-            method='dopri5',
-        )
-        z_t = z_t[..., :-self.aug_dim]
-        return z_t, logp_diff_t
-
 
 if __name__ == '__main__':
     t0 = 0
@@ -487,9 +631,9 @@ if __name__ == '__main__':
                           if torch.cuda.is_available() else 'cpu')
 
     # model
-    tol_control = TolControl(args.niters, end_tol=10**-5, steps=5)
     # func = CNF(in_out_dim=2 + args.aug_dim, hidden_dim=args.hidden_dim, width=args.width).to(device)
-    func = CNF5(in_out_dim=2 + args.aug_dim).to(device)
+    func = CNF10(in_out_dim=2 + args.aug_dim).to(device)
+    print(func)
     optimizer = optim.Adam(func.parameters(), lr=args.lr)
     if args.de_augment:
         p_z0 = torch.distributions.MultivariateNormal(
