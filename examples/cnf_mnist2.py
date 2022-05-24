@@ -442,11 +442,11 @@ if __name__ == "__main__":
                     for k, v in state.items():
                         if torch.is_tensor(v):
                             state[k] = cvt(v)
-            losses_dict = torch.load(os.path.join(args.save, "losses.pth"))
-            if "val_losses" in losses_dict:
-                val_losses = losses_dict["val_losses"]
-            if "train_losses" in losses_dict:
-                train_losses = losses_dict["train_losses"]
+            # losses_dict = torch.load(os.path.join(args.save, "losses.pth"))
+            # if "val_losses" in losses_dict:
+            #     val_losses = losses_dict["val_losses"]
+            # if "train_losses" in losses_dict:
+            #     train_losses = losses_dict["train_losses"]
             if "val_losses" in checkpt:
                 val_losses = checkpt["val_losses"]
             if "train_losses" in checkpt:
