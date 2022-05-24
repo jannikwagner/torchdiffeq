@@ -18,31 +18,6 @@ import torchvision.transforms as transforms
 here, I will experiment!
 """
 
-import dataclasses
-@dataclasses.dataclass
-class Config:
-    network: str = "odenet"
-    tol: float = 1e-3
-    adjoint: bool = False
-    downsampling_method: str = "conv"
-    nepochs: int = 10
-    data_aug: bool = True
-    lr: float = 0.1
-    batch_size: int = 138
-    test_batch_size : int = 1000
-
-    save: str = './experiment1'
-    debug: bool = False
-    gpu: int = 0
-    data_path: str = "./data/mnist"
-
-args = Config()
-
-if args.adjoint:
-    from torchdiffeq import odeint_adjoint as odeint
-else:
-    from torchdiffeq import odeint
-
 
 class Linear_CNF_HN_func(nn.Module):
     """Adapted from the NumPy implementation at:
@@ -582,11 +557,17 @@ class Args:
     log_freq = 10
     val_freq = 10
     save = "exp_test_cnf_mnist"
+    adjoint = True
 
 import time
 
 if __name__ == "__main__":
     args = Args()
+    if args.adjoint:
+        from torchdiffeq import odeint_adjoint as odeint
+    else:
+        from torchdiffeq import odeint
+
     # train_set, test_loader, data_shape = get_dataset(args)
     # model = create_model(args, data_shape)
     # print(model)
