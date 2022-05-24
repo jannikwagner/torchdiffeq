@@ -20,9 +20,9 @@ class Conv2dConcat(nn.Module):
         # print(ttx.shape)
         y = self._layer(ttx)
         # print(y.shape)
+        y = self.nonlinearity(y)
         if self.residual:
             y = y + x
-        y = self.nonlinearity(y)
         # print(y)
         return y
 
@@ -32,7 +32,7 @@ NONLINEARITIES = {
     "softplus": nn.Softplus(),
     "elu": nn.ELU(),
     "none": nn.Identity(),
-    None: nn.Identity()
+    None: nn.Identity(),
 }
 
 class ODENet(nn.Module):
@@ -80,11 +80,12 @@ def sample_gaussian_like(y):
     return torch.randn_like(y)
 
 class ODEFunc(nn.Module):
-    def __init__(self, ode_net, approximate_trace=True):
+    def __init__(self, ode_net, approximate_trace=True, aug_dim=0):
         super().__init__()
         self.ode_net = ode_net
         self.divergence_fn = divergence_approx if approximate_trace else divergence_bf
         self.num_calls = 0
+        self.aug_dim = aug_dim
     def forward(self, t, states):
         self.num_calls += 1
         z, log_pz = states if isinstance(states, tuple) else (states, None)
@@ -343,9 +344,9 @@ def makedirs(dirname):
 import dataclasses
 @dataclasses.dataclass
 class Args:
-    hidden_dims = [32,32,32]
+    hidden_dims = [64,64,64]
     # hidden_dims = []
-    nonlinearity = "tanh"
+    nonlinearity = "softplus"
     aug_dim = 0
 
     approximate_trace = True
@@ -374,7 +375,7 @@ class Args:
 
     log_freq = 10
     val_freq = 1
-    save = "experiment7"
+    save = "experiment8"
 
     adjoint = True
 
