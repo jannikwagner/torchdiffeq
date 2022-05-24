@@ -383,7 +383,7 @@ class Args:
 
     adjoint = True
 
-    data_parallel = False
+    data_parallel = True
 
 
 args = Args()
@@ -439,101 +439,110 @@ if __name__ == "__main__":
                     for k, v in state.items():
                         if torch.is_tensor(v):
                             state[k] = cvt(v)
+            losses_dict = torch.load(os.path.join(args.save, "losses.pth"))
+            if "val_losses" in losses_dict:
+                val_losses = losses_dict["val_losses"]
+            if "train_losses" in losses_dict:
+                train_losses = losses_dict["train_losses"]
             if "val_losses" in checkpt:
                 val_losses = checkpt["val_losses"]
             if "train_losses" in checkpt:
                 train_losses = checkpt["train_losses"]
     except:
         print("resuming failed")
+    
     best_loss = float("inf")
     itr = 0
     for epoch in range(args.begin_epoch, args.num_epochs + 1):
-        model.train()
-        train_loader = get_train_loader(train_set)
-        for _, (x, y) in enumerate(train_loader):
-            start = time.time()
-            update_lr(optimizer, itr)
-            optimizer.zero_grad()
-
-            # cast data and move to device
-            x = cvt(x)
-            # compute loss
-            loss = compute_bits_per_dim(x, model)
-
-            loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-
-            optimizer.step()
-
-            train_losses.append(loss.item())
-            time_meter.update(time.time() - start)
-            loss_meter.update(loss.item())
-            grad_meter.update(grad_norm)
-            num_calls = model.module.ode_func.num_calls if args.data_parallel and torch.cuda.is_available() else model.ode_func.num_calls
-            calls_meter.update(num_calls)
-
-            if (itr) % args.log_freq == 0:
-                log_message = (
-                    "Iter {:04d} | Time {:.4f}({:.4f}) | Bit/dim {:.4f}({:.4f}) | "
-                    "Grad Norm {:.4f}({:.4f}) | Calls {:.4f}({:.4f})".format(
-                        itr, time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg, grad_meter.val, grad_meter.avg, calls_meter.val, calls_meter.avg
-                    )
-                )
-                print(log_message)
-
-            itr += 1
-            
-            
-
-        # compute test loss
-        model.eval()
-        if epoch % args.val_freq == 0:
-            print("validating")
-            with torch.no_grad():
+        try:
+            model.train()
+            train_loader = get_train_loader(train_set)
+            for _, (x, y) in enumerate(train_loader):
                 start = time.time()
-                losses = []
-                for i, (x, y) in enumerate(test_loader):
-                    print(i, end=" ")
-                    x = cvt(x)
-                    loss = compute_bits_per_dim(x, model)
-                    losses.append(loss.item())
-                    
-                    
+                update_lr(optimizer, itr)
+                optimizer.zero_grad()
 
-                loss = np.mean(losses)
-                val_losses.append(loss)
-                if loss < best_loss:
-                    best_loss = loss
-                    makedirs(args.save)
-                    torch.save({
-                        "args": args,
-                        "state_dict": model.module.state_dict() if args.data_parallel and torch.cuda.is_available() else model.state_dict(),
-                        "optim_state_dict": optimizer.state_dict(),
-                        "val_losses": (val_losses),
-                        "train_losses": (val_losses),
-                    }, os.path.join(args.save, "checkpt.pth"))
+                # cast data and move to device
+                x = cvt(x)
+                # compute loss
+                loss = compute_bits_per_dim(x, model)
 
-        # visualize samples and density
-        print("sample")
-        with torch.no_grad():
-            fig_filename = os.path.join(args.save, "figs", "{:04d}.jpg".format(epoch))
-            makedirs(os.path.dirname(fig_filename))
-            generated_samples = model(fixed_z, get_log_px=False, reverse=True).view(-1, *data_shape)
-            save_image(generated_samples, fig_filename, nrow=10)
-    # except:
-        print("hi")
-    # finally:
-        plt.plot(range(len(train_losses)), train_losses, label="train loss")
-        plt.xlabel("update step")
-        plt.ylabel("loss")
-        plt.legend()
-        plt.savefig(os.path.join(args.save, "train_loss.png"))
-        plt.cla()
-        plt.plot(range(len(val_losses)), val_losses, label="val loss")
-        plt.xlabel("time")
-        plt.ylabel("loss")
-        plt.legend()
-        plt.savefig(os.path.join(args.save, "val_loss.png"))
-        plt.cla()
+                loss.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
+                optimizer.step()
+
+                train_losses.append(loss.item())
+                time_meter.update(time.time() - start)
+                loss_meter.update(loss.item())
+                grad_meter.update(grad_norm)
+                num_calls = model.module.ode_func.num_calls if args.data_parallel and torch.cuda.is_available() else model.ode_func.num_calls
+                calls_meter.update(num_calls)
+
+                if (itr) % args.log_freq == 0:
+                    log_message = (
+                        "Iter {:04d} | Time {:.4f}({:.4f}) | Bit/dim {:.4f}({:.4f}) | "
+                        "Grad Norm {:.4f}({:.4f}) | Calls {:.4f}({:.4f})".format(
+                            itr, time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg, grad_meter.val, grad_meter.avg, calls_meter.val, calls_meter.avg
+                        )
+                    )
+                    print(log_message)
+
+                itr += 1
+                
+            # compute test loss
+            model.eval()
+            if epoch % args.val_freq == 0:
+                print("validating")
+                with torch.no_grad():
+                    start = time.time()
+                    losses = []
+                    for i, (x, y) in enumerate(test_loader):
+                        print(i, end=" ")
+                        x = cvt(x)
+                        loss = compute_bits_per_dim(x, model)
+                        losses.append(loss.item())
+                        
+
+                    loss = np.mean(losses)
+                    val_losses.append(loss)
+                    if loss < best_loss:
+                        best_loss = loss
+                        makedirs(args.save)
+                        torch.save({
+                            "args": args,
+                            "state_dict": model.module.state_dict() if args.data_parallel and torch.cuda.is_available() else model.state_dict(),
+                            "optim_state_dict": optimizer.state_dict(),
+                        }, os.path.join(args.save, "checkpt.pth"))
+
+            # visualize samples and density
+        except:
+            break
+        finally:
+            torch.save({
+                "val_losses": (val_losses),
+                "train_losses": (val_losses),
+            }, os.path.join(args.save, "losses.pth"))
+
+            print("sample")
+            with torch.no_grad():
+                fig_filename = os.path.join(args.save, "figs", "{:04d}.jpg".format(epoch))
+                makedirs(os.path.dirname(fig_filename))
+                generated_samples = model(fixed_z, get_log_px=False, reverse=True).view(-1, *data_shape)
+                save_image(generated_samples, fig_filename, nrow=10)
+        # except:
+            print("hi")
+        # finally:
+            plt.plot(range(len(train_losses)), train_losses, label="train loss")
+            plt.xlabel("update step")
+            plt.ylabel("loss")
+            plt.legend()
+            plt.savefig(os.path.join(args.save, "train_loss.png"))
+            plt.cla()
+            plt.plot(range(len(val_losses)), val_losses, label="val loss")
+            plt.xlabel("time")
+            plt.ylabel("loss")
+            plt.legend()
+            plt.savefig(os.path.join(args.save, "val_loss.png"))
+            plt.cla()
         
-    
