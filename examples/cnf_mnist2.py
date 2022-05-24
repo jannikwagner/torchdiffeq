@@ -354,7 +354,7 @@ class Args:
     
     time_length = 1.0
     solver = "dopri5"
-    tol = 1e-5
+    tol = 1e-3
 
     data = "mnist"
     imagesize = None

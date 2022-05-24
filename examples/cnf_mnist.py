@@ -378,7 +378,7 @@ def _flip(x, dim):
     return x[tuple(indices)]
 
 
-def create_model(args, data_shape):
+def create_model(args, data_shape, tol):
     hidden_dims = tuple(map(int, args.dims.split(",")))
     strides = tuple(map(int, args.strides.split(",")))
 
@@ -398,6 +398,8 @@ def create_model(args, data_shape):
             odefunc=odefunc,
             T=args.time_length,
             solver=args.solver,
+            atol=tol,
+            rtol=tol
         )
         return cnf
     model = build_cnf()
@@ -558,6 +560,7 @@ class Args:
     
     time_length = 1.0
     solver = "dopri5"
+    tol = 1e-5
 
     data = "mnist"
     imagesize = None
@@ -571,12 +574,14 @@ class Args:
     weight_decay = 0.0001
 
     begin_epoch = 1
-    num_epochs = 100
+    num_epochs = 1
     warmup_iters = 1000
 
     max_grad_norm = 1e10
 
     log_freq = 10
+    val_freq = 10
+    save = "exp_test_cnf_mnist"
 
 import time
 
@@ -595,7 +600,7 @@ if __name__ == "__main__":
     train_set, test_loader, data_shape = get_dataset(args)
 
     # build model
-    model = create_model(args, data_shape)
+    model = create_model(args, data_shape, args.tol)
 
 
     # optimizer
