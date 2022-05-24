@@ -503,9 +503,11 @@ if __name__ == "__main__":
         plt.ylabel("loss")
         plt.legend()
         plt.savefig(os.path.join(args.save, "train_loss.png"))
+        plt.cla()
         plt.plot(range(len(val_losses)), val_losses, label="val loss")
         plt.xlabel("time")
         plt.ylabel("loss")
         plt.legend()
         plt.savefig(os.path.join(args.save, "val_loss.png"))
+        plt.cla()
     
