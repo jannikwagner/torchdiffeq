@@ -10,6 +10,7 @@ from sklearn.datasets import make_circles
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import csv
 
 
 parser = argparse.ArgumentParser()
@@ -24,7 +25,7 @@ parser.add_argument('--yolo_dim', type=int, default=2)
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--train_dir', type=str, default=None)
 parser.add_argument('--results_dir', type=str, default="results_test")
-parser.add_argument('--img', type=str, default="imgs/github.png")
+parser.add_argument('--img', type=str, default="imgs/flag.png")
 parser.add_argument('--aug_dim', type=int, default=0)
 args = parser.parse_args()
 
@@ -36,15 +37,14 @@ else:
 
 
 class CNF(nn.Module):
-    """Adapted from the NumPy implementation at:
-    https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
+    """ CNF using a hyper network of 3 layers
     """
-    def __init__(self, in_out_dim, hidden_dim, width, yolo_dim):
+    def __init__(self, in_out_dim, hidden_dim, width):
         super().__init__()
         self.in_out_dim = in_out_dim
         self.hidden_dim = hidden_dim
         self.width = width
-        self.hyper_net = HyperNetwork(in_out_dim, hidden_dim, width, yolo_dim)
+        self.hyper_net = HyperNetwork(in_out_dim, hidden_dim, width)
 
     def forward(self, t, states):
         z = states[0]
@@ -67,9 +67,6 @@ class CNF(nn.Module):
         return (dz_dt, dlogp_z_dt)
 
 class CNF2(nn.Module):
-    """Adapted from the NumPy implementation at:
-    https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
-    """
     def __init__(self, in_out_dim, hidden_dim, width):
         super().__init__()
         self.in_out_dim = in_out_dim
@@ -113,9 +110,6 @@ class CNF2(nn.Module):
         return (dz_dt, dlogp_z_dt)
 
 class CNF3(nn.Module):
-    """Adapted from the NumPy implementation at:
-    https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
-    """
     def __init__(self, in_out_dim):
         super().__init__()
         self.in_out_dim = in_out_dim
@@ -164,9 +158,6 @@ class TimeIncorporatingLayer(nn.Module):
 
 
 class CNF4(nn.Module):
-    """Adapted from the NumPy implementation at:
-    https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
-    """
     def __init__(self, in_out_dim):
         super().__init__()
         self.in_out_dim = in_out_dim
@@ -199,8 +190,8 @@ class CNF4(nn.Module):
         return (dz_dt, dlogp_z_dt)
 
 class CNF5(nn.Module):
-    """Adapted from the NumPy implementation at:
-    https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
+    """
+    CNF with time incoporating layers
     """
     def __init__(self, in_out_dim):
         super().__init__()
@@ -228,8 +219,8 @@ class CNF5(nn.Module):
         return (dz_dt, dlogp_z_dt)
 
 class CNF6(nn.Module):
-    """Adapted from the NumPy implementation at:
-    https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
+    """
+    CNF with time incoporating layers
     """
     def __init__(self, in_out_dim):
         super().__init__()
@@ -268,7 +259,47 @@ def trace_df_dz(f, z):
 
 
 class HyperNetwork(nn.Module):
-    """Hyper-network allowing f(z(t), t) to change with time.
+    """Hyper-network allowing f(z(t), t) to change with time. 3 layers
+
+    Adapted from the NumPy implementation at:
+    https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
+    """
+    def __init__(self, in_out_dim, hidden_dim, width):
+        super().__init__()
+
+        blocksize = width * in_out_dim
+
+        self.fc1 = nn.Linear(1, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, 3 * blocksize + width)
+
+        self.in_out_dim = in_out_dim
+        self.hidden_dim = hidden_dim
+        self.width = width
+        self.blocksize = blocksize
+
+    def forward(self, t):
+        # predict params
+        params = t.reshape(1, 1)
+        params = torch.tanh(self.fc1(params))
+        params = torch.tanh(self.fc2(params))
+        params = self.fc3(params)
+
+        # restructure
+        params = params.reshape(-1)
+        W = params[:self.blocksize].reshape(self.width, self.in_out_dim, 1)
+
+        U = params[self.blocksize:2 * self.blocksize].reshape(self.width, 1, self.in_out_dim)
+
+        G = params[2 * self.blocksize:3 * self.blocksize].reshape(self.width, 1, self.in_out_dim)
+        U = U * torch.sigmoid(G)
+
+        B = params[3 * self.blocksize:].reshape(self.width, 1, 1)
+        return [W, B, U]
+
+
+class HyperNetwork4Layers(nn.Module):
+    """Hyper-network allowing f(z(t), t) to change with time. With 4 layers
 
     Adapted from the NumPy implementation at:
     https://gist.github.com/rtqichen/91924063aa4cc95e7ef30b3a5491cc52
@@ -352,7 +383,7 @@ probs = img.reshape(-1) / img.sum()
 std = np.array([8 / w / 2, 8 / h / 2])
 
 def get_batch(num_samples):
-    # get the points in circles
+    # get the points from the image specified in args.img
     inds = np.random.choice(int(probs.shape[0]), int(num_samples), p=probs)
     m = means[inds]
     points = np.random.randn(*m.shape) * std + m
@@ -456,8 +487,8 @@ if __name__ == '__main__':
 
     # model
     tol_control = TolControl(args.niters, end_tol=10**-5, steps=5)
-    # func = CNF(in_out_dim=2, hidden_dim=args.hidden_dim, width=args.width, yolo_dim=args.yolo_dim).to(device)
-    func = CNF6(in_out_dim=2+args.aug_dim).to(device)
+    # func = CNF(in_out_dim=2 + args.aug_dim, hidden_dim=args.hidden_dim, width=args.width).to(device)
+    func = CNF5(in_out_dim=2 + args.aug_dim).to(device)
     optimizer = optim.Adam(func.parameters(), lr=args.lr)
     p_z0 = torch.distributions.MultivariateNormal(
         loc=torch.tensor([0.0, 0.0]).to(device),
@@ -477,6 +508,11 @@ if __name__ == '__main__':
     # tol = tol_control.get_tol()
     tol = 10**-5
     try:
+        filename = '../loss_time_incoperating/loss__cnf5_niter_' + str(args.niters) + '_augdim_' + str(args.aug_dim)
+        f = open(filename, 'w', newline='', encoding='utf-8')
+        writer = csv.writer(f)
+        writer.writerow(['iteration', 'running avg loss'])
+
         for itr in range(1, args.niters + 1):
             optimizer.zero_grad()
 
@@ -507,6 +543,9 @@ if __name__ == '__main__':
             # tol = tol_control.update(loss.item())
 
             print('Iter: {}, running avg loss: {:.4f}'.format(itr, loss_meter.avg))
+            writer.writerow([itr, loss_meter.avg])
+
+        f.close()
 
     except KeyboardInterrupt:
         pass
