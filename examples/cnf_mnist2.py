@@ -6,6 +6,7 @@ import time
 import numpy as np
 import os
 from torchvision.utils import save_image
+import pandas
 
 class Conv2dConcat(nn.Module):
     def __init__(self, in_dim, out_dim, kernel_size=3, stride=1, padding=1, residual=True, nonlinearity="relu"):
@@ -371,7 +372,7 @@ class Args:
 
     begin_epoch = 1
     num_epochs = 50
-    warmup_iters = 1000
+    warmup_iters = 10
 
     max_grad_norm = 1e10
 
@@ -418,6 +419,14 @@ if __name__ == "__main__":
 
     # visualize samples
     fixed_z = cvt(torch.randn(100, *data_shape))
+
+    time_meter = RunningAverageMeter(0.97)
+    loss_meter = RunningAverageMeter(0.97)
+    grad_meter = RunningAverageMeter(0.97)
+    calls_meter = RunningAverageMeter(0.97)
+    train_losses = []
+    val_losses = []
+
     try:
         if args.resume:
             print("loading checkpoint")
@@ -430,16 +439,12 @@ if __name__ == "__main__":
                     for k, v in state.items():
                         if torch.is_tensor(v):
                             state[k] = cvt(v)
+            if "val_losses" in checkpt:
+                val_losses = checkpt["val_losses"]
+            if "train_losses" in checkpt:
+                train_losses = checkpt["train_losses"]
     except:
         print("resuming failed")
-
-    time_meter = RunningAverageMeter(0.97)
-    loss_meter = RunningAverageMeter(0.97)
-    grad_meter = RunningAverageMeter(0.97)
-    calls_meter = RunningAverageMeter(0.97)
-    train_losses = []
-    val_losses = []
-
     best_loss = float("inf")
     itr = 0
     for epoch in range(args.begin_epoch, args.num_epochs + 1):
@@ -478,6 +483,7 @@ if __name__ == "__main__":
 
             itr += 1
             
+            
 
         # compute test loss
         model.eval()
@@ -486,10 +492,12 @@ if __name__ == "__main__":
             with torch.no_grad():
                 start = time.time()
                 losses = []
-                for (x, y) in test_loader:
+                for i, (x, y) in enumerate(test_loader):
+                    print(i, end=" ")
                     x = cvt(x)
                     loss = compute_bits_per_dim(x, model)
                     losses.append(loss.item())
+                    
                     
 
                 loss = np.mean(losses)
@@ -501,6 +509,8 @@ if __name__ == "__main__":
                         "args": args,
                         "state_dict": model.module.state_dict() if args.data_parallel and torch.cuda.is_available() else model.state_dict(),
                         "optim_state_dict": optimizer.state_dict(),
+                        "val_losses": (val_losses),
+                        "train_losses": (val_losses),
                     }, os.path.join(args.save, "checkpt.pth"))
 
         # visualize samples and density
@@ -525,4 +535,5 @@ if __name__ == "__main__":
         plt.legend()
         plt.savefig(os.path.join(args.save, "val_loss.png"))
         plt.cla()
+        
     
