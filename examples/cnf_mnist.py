@@ -549,8 +549,8 @@ from torchvision.utils import save_image
 import dataclasses
 @dataclasses.dataclass
 class Args:
-    dims = "8,32,32,8"
-    strides = "2,2,1,-2,-2"
+    dims = "64,64,64"
+    strides = "1,1,1,1"
     nonlinearity = "tanh"
 
     divergence_fn = "approximate"
