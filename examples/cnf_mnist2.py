@@ -360,8 +360,8 @@ class Args:
 
     data = "mnist"
     imagesize = None
-    test_batch_size = 64
-    batch_size = 64
+    test_batch_size = 200
+    batch_size = 200
 
     add_noise = False
     resume = None
@@ -378,6 +378,7 @@ class Args:
     log_freq = 10
     val_freq = 1
     save = "experiment8"
+    resume = True
 
     adjoint = True
 
@@ -417,6 +418,20 @@ if __name__ == "__main__":
 
     # visualize samples
     fixed_z = cvt(torch.randn(100, *data_shape))
+    try:
+        if args.resume:
+            print("loading checkpoint")
+            checkpt = torch.load(os.path.join(args.save, "checkpt.pth"))
+            model.load_state_dict(checkpt["state_dict"])
+            if "optim_state_dict" in checkpt.keys():
+                optimizer.load_state_dict(checkpt["optim_state_dict"])
+                # Manually move optimizer state to device.
+                for state in optimizer.state.values():
+                    for k, v in state.items():
+                        if torch.is_tensor(v):
+                            state[k] = cvt(v)
+    except:
+        print("resuming failed")
 
     time_meter = RunningAverageMeter(0.97)
     loss_meter = RunningAverageMeter(0.97)
