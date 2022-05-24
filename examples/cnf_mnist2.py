@@ -61,7 +61,7 @@ class StackedODENet(nn.Module):
             x = layer(t, x)
         return x
 
-def divergence_bf(f, z):
+def divergence_bf(f, z, e=None):
     f_flat = f.view(f.shape[0], -1)
     sum_diag = 0.
     for i in range(f_flat.shape[1]):
@@ -69,8 +69,8 @@ def divergence_bf(f, z):
         sum_diag += grad.view(grad.shape[0], -1).contiguous()[:, i].contiguous()
     return sum_diag.contiguous()
 
-def divergence_approx(f, z):
-    e = sample_gaussian_like(z)
+def divergence_approx(f, z, e):
+    # e = sample_gaussian_like(z)
     e_dfdz = torch.autograd.grad(f, z, e, create_graph=True)[0]
     e_dfdz_e = e_dfdz * e
     approx_tr_dzdx = e_dfdz_e.view(z.shape[0], -1).sum(dim=1)
@@ -86,6 +86,7 @@ class ODEFunc(nn.Module):
         self.divergence_fn = divergence_approx if approximate_trace else divergence_bf
         self.num_calls = 0
         self.aug_dim = aug_dim
+        self.e = None
     def forward(self, t, states):
         self.num_calls += 1
         z, log_pz = states if isinstance(states, tuple) else (states, None)
@@ -100,13 +101,14 @@ class ODEFunc(nn.Module):
                 # if not self.training:
                 #     divergence = divergence_bf(dx, z).view(batchsize, 1)
                 # else:
-                divergence = self.divergence_fn(dx, z).view(batchsize, 1)
+                divergence = self.divergence_fn(dx, z, self.e).view(batchsize, 1)
             return tuple([dx, -divergence])
         else:
             dx = self.ode_net(t, z)
             return dx
-    def before_int(self):
+    def before_int(self, z):
         self.num_calls = 0
+        self.e = sample_gaussian_like(z)
 
         
 def _flip(x, dim):
@@ -148,7 +150,7 @@ class CNF(nn.Module):
         tt = torch.zeros(y_shape).to(y)
         y_aug = torch.cat([tt, y], 1)
         
-        self.ode_func.before_int()
+        self.ode_func.before_int(y_aug)
 
         z_t = odeint(
             self.ode_func,
@@ -354,7 +356,7 @@ class Args:
     
     time_length = 1.0
     solver = "dopri5"
-    tol = 1e-3
+    tol = 1e-5
 
     data = "mnist"
     imagesize = None
@@ -368,7 +370,7 @@ class Args:
     weight_decay = 0.0001
 
     begin_epoch = 1
-    num_epochs = 100
+    num_epochs = 50
     warmup_iters = 1000
 
     max_grad_norm = 1e10
@@ -421,83 +423,89 @@ if __name__ == "__main__":
     grad_meter = RunningAverageMeter(0.97)
     calls_meter = RunningAverageMeter(0.97)
     train_losses = []
+    val_losses = []
 
     best_loss = float("inf")
     itr = 0
-    try:
-        for epoch in range(args.begin_epoch, args.num_epochs + 1):
-            model.train()
-            train_loader = get_train_loader(train_set)
-            for _, (x, y) in enumerate(train_loader):
-                start = time.time()
-                update_lr(optimizer, itr)
-                optimizer.zero_grad()
+    for epoch in range(args.begin_epoch, args.num_epochs + 1):
+        model.train()
+        train_loader = get_train_loader(train_set)
+        for _, (x, y) in enumerate(train_loader):
+            start = time.time()
+            update_lr(optimizer, itr)
+            optimizer.zero_grad()
 
-                # cast data and move to device
-                x = cvt(x)
-                # compute loss
-                loss = compute_bits_per_dim(x, model)
+            # cast data and move to device
+            x = cvt(x)
+            # compute loss
+            loss = compute_bits_per_dim(x, model)
 
-                loss.backward()
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-                optimizer.step()
+            optimizer.step()
 
-                train_losses.append(loss.item())
-                time_meter.update(time.time() - start)
-                loss_meter.update(loss.item())
-                grad_meter.update(grad_norm)
-                num_calls = model.module.ode_func.num_calls if args.data_parallel and torch.cuda.is_available() else model.ode_func.num_calls
-                calls_meter.update(num_calls)
+            train_losses.append(loss.item())
+            time_meter.update(time.time() - start)
+            loss_meter.update(loss.item())
+            grad_meter.update(grad_norm)
+            num_calls = model.module.ode_func.num_calls if args.data_parallel and torch.cuda.is_available() else model.ode_func.num_calls
+            calls_meter.update(num_calls)
 
-                if (itr) % args.log_freq == 0:
-                    log_message = (
-                        "Iter {:04d} | Time {:.4f}({:.4f}) | Bit/dim {:.4f}({:.4f}) | "
-                        "Grad Norm {:.4f}({:.4f}) | Calls {:.4f}({:.4f})".format(
-                            itr, time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg, grad_meter.val, grad_meter.avg, calls_meter.val, calls_meter.avg
-                        )
+            if (itr) % args.log_freq == 0:
+                log_message = (
+                    "Iter {:04d} | Time {:.4f}({:.4f}) | Bit/dim {:.4f}({:.4f}) | "
+                    "Grad Norm {:.4f}({:.4f}) | Calls {:.4f}({:.4f})".format(
+                        itr, time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg, grad_meter.val, grad_meter.avg, calls_meter.val, calls_meter.avg
                     )
-                    print(log_message)
+                )
+                print(log_message)
 
-                itr += 1
-                
+            itr += 1
+            
 
-            # compute test loss
-            model.eval()
-            if epoch % args.val_freq == 0:
-                print("validating")
-                with torch.no_grad():
-                    start = time.time()
-                    losses = []
-                    for (x, y) in test_loader:
-                        x = cvt(x)
-                        loss = compute_bits_per_dim(x, model)
-                        losses.append(loss.item())
-                        
-
-                    loss = np.mean(losses)
-                    if loss < best_loss:
-                        best_loss = loss
-                        makedirs(args.save)
-                        torch.save({
-                            "args": args,
-                            "state_dict": model.module.state_dict() if args.data_parallel and torch.cuda.is_available() else model.state_dict(),
-                            "optim_state_dict": optimizer.state_dict(),
-                        }, os.path.join(args.save, "checkpt.pth"))
-
-            # visualize samples and density
-            print("sample")
+        # compute test loss
+        model.eval()
+        if epoch % args.val_freq == 0:
+            print("validating")
             with torch.no_grad():
-                fig_filename = os.path.join(args.save, "figs", "{:04d}.jpg".format(epoch))
-                makedirs(os.path.dirname(fig_filename))
-                generated_samples = model(fixed_z, get_log_px=False, reverse=True).view(-1, *data_shape)
-                save_image(generated_samples, fig_filename, nrow=10)
-    except:
+                start = time.time()
+                losses = []
+                for (x, y) in test_loader:
+                    x = cvt(x)
+                    loss = compute_bits_per_dim(x, model)
+                    losses.append(loss.item())
+                    
+
+                loss = np.mean(losses)
+                val_losses.append(loss)
+                if loss < best_loss:
+                    best_loss = loss
+                    makedirs(args.save)
+                    torch.save({
+                        "args": args,
+                        "state_dict": model.module.state_dict() if args.data_parallel and torch.cuda.is_available() else model.state_dict(),
+                        "optim_state_dict": optimizer.state_dict(),
+                    }, os.path.join(args.save, "checkpt.pth"))
+
+        # visualize samples and density
+        print("sample")
+        with torch.no_grad():
+            fig_filename = os.path.join(args.save, "figs", "{:04d}.jpg".format(epoch))
+            makedirs(os.path.dirname(fig_filename))
+            generated_samples = model(fixed_z, get_log_px=False, reverse=True).view(-1, *data_shape)
+            save_image(generated_samples, fig_filename, nrow=10)
+    # except:
         print("hi")
-    finally:
+    # finally:
         plt.plot(range(len(train_losses)), train_losses, label="train loss")
         plt.xlabel("update step")
         plt.ylabel("loss")
         plt.legend()
-        plt.savefig(os.path.join(args.save, "loss.pdf"))
+        plt.savefig(os.path.join(args.save, "train_loss.png"))
+        plt.plot(range(len(val_losses)), val_losses, label="val loss")
+        plt.xlabel("time")
+        plt.ylabel("loss")
+        plt.legend()
+        plt.savefig(os.path.join(args.save, "val_loss.png"))
     
