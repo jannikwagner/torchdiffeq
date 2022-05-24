@@ -80,6 +80,9 @@ def divergence_approx(f, z, e):
 def sample_gaussian_like(y):
     return torch.randn_like(y)
 
+def sample_rademacher_like(y):
+    return torch.randint(low=0, high=2, size=y.shape).to(y) * 2 - 1
+
 class ODEFunc(nn.Module):
     def __init__(self, ode_net, approximate_trace=True, aug_dim=0):
         super().__init__()
@@ -109,7 +112,7 @@ class ODEFunc(nn.Module):
             return dx
     def before_int(self, z):
         self.num_calls = 0
-        self.e = sample_gaussian_like(z)
+        self.e = sample_rademacher_like(z)
 
         
 def _flip(x, dim):
