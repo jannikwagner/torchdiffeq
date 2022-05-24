@@ -415,11 +415,6 @@ if __name__ == "__main__":
     # optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    if torch.cuda.is_available():
-        if args.data_parallel:
-            model = torch.nn.DataParallel(model)
-        model = model.cuda()
-
     # visualize samples
     fixed_z = cvt(torch.randn(100, *data_shape))
 
@@ -454,6 +449,11 @@ if __name__ == "__main__":
     except:
         print("resuming failed")
     
+    if torch.cuda.is_available():
+        if args.data_parallel:
+            model = torch.nn.DataParallel(model)
+        model = model.cuda()
+
     best_loss = float("inf")
     itr = 0
     for epoch in range(args.begin_epoch, args.num_epochs + 1):
